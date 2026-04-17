@@ -1,0 +1,23 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Local SQLite databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Environment files
+.env
+.env.*
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
