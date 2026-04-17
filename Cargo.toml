@@ -1,0 +1,35 @@
+[package]
+name = "my-task-sync"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Local daemon syncing my-task SQLite with my-own (Neon) over HTTP"
+license = "MIT"
+
+[[bin]]
+name = "my-task-sync"
+path = "src/main.rs"
+
+[lib]
+name = "my_task_sync"
+path = "src/lib.rs"
+
+[dependencies]
+rusqlite = { version = "0.31", features = ["bundled"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+toml = "0.8"
+dirs = "6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ctrlc = "3"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+strip = true
+lto = "thin"

@@ -1,0 +1,11 @@
+# Workaround: cargo only injects CARGO_BIN_EXE_<name> at COMPILE time
+# (for use with the `env!()` / `option_env!()` macro). The integration
+# test in tests/cli_integration_test.rs reads the variable at RUNTIME
+# via std::env::var, which cargo does not set automatically.
+#
+# Setting it here propagates the value to all child processes spawned
+# by cargo, including the test binaries. The path is relative to this
+# config file (the workspace root) so it resolves correctly when the
+# tests run from the workspace.
+[env]
+CARGO_BIN_EXE_my-task-sync = { value = "target/debug/my-task-sync", relative = true, force = true }

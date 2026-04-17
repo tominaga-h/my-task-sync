@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.my-task-sync</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/my-task-sync</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/my-task-sync.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/my-task-sync.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>RUST_LOG</key>
+    <string>my_task_sync=info</string>
+  </dict>
+</dict>
+</plist>
