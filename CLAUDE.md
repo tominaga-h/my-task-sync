@@ -2,6 +2,22 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **⚠️ ARCHITECTURE IS MIGRATING (as of 2026-04-18)**
+>
+> The description below documents the **v1 polling daemon** that was the initial implementation.
+> v2 reverses the direction: my-task-sync becomes an HTTP server (axum on `:3333`) that my-own
+> calls into, with ngrok as the public ingress in Phase 2. See `docs/SERVER_DESIGN.md` for the
+> authoritative v2 spec and `tasks/plan.md` for the phased migration plan.
+>
+> **Current state**: T1 landed — v1 daemon code (`sync_engine` / `sync_state` / `api_client`)
+> is deleted, axum server skeleton with `/healthz` boots on `:3333`. Everything below about
+> the three-step sync cycle, `state.db`, `last_push_at` / `last_pull_at` invariants, and
+> `--once` / `--dry-run` flags is **no longer accurate**. It will be rewritten once Phase 1
+> (T2–T8) is complete.
+>
+> When answering questions about the codebase, lean on `docs/SERVER_DESIGN.md` + reading
+> actual source, not the v1 description that follows.
+
 ## What this is
 
 macOS local daemon that keeps **my-task** (local Rust CLI backed by SQLite at `~/Library/Application Support/my-task/tasks.db`) in sync with **my-own** (Next.js + Neon Postgres at `~/lab/typescript/REACT/my-own`). Polls every 30s under `launchctl`. Single-user, single-machine — not a general sync service.

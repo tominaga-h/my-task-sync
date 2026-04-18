@@ -1,22 +1,28 @@
 //! Binary entry point: parse CLI → resolve config → run axum server.
 //!
-//! Designed to run under launchctl with KeepAlive. Fatal startup errors
-//! (config / SQLite / bind) cause a non-zero exit so KeepAlive can see
+//! Designed to run under launchctl with `KeepAlive`. Fatal startup errors
+//! (config / `SQLite` / bind) cause a non-zero exit so `KeepAlive` can see
 //! the failure; inside the server, handler errors are turned into HTTP
 //! responses rather than terminating the process.
 
 use std::net::SocketAddr;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use tokio::net::TcpListener;
 use tokio::signal;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use my_task_sync::config::{self, ResolvedConfig};
 use my_task_sync::error::Error;
 use my_task_sync::http;
 use my_task_sync::sqlite;
+
+/// シャットダウン信号を受けてから in-flight リクエストの drain を待つ
+/// 最大時間。超過すると serve を落として強制終了する — launchctl の
+/// 再起動サイクルを詰まらせないため。
+const GRACEFUL_SHUTDOWN_SECS: u64 = 10;
 
 const HELP_TEXT: &str = "\
 my-task-sync — local HTTP server backing my-own with the my-task SQLite.
@@ -94,15 +100,36 @@ async fn run(cfg: ResolvedConfig) -> Result<(), Error> {
     let state = http::AppState::new(conn);
     let router = http::router(state);
 
+    // Loopback のみ bind: Phase 2 の ngrok が localhost:port を公開 URL に
+    // 転送する前提。外部インターフェースに直接 bind させないことで
+    // ハードニング面も稼ぐ。
     let addr = SocketAddr::from(([127, 0, 0, 1], cfg.server.port));
     let listener = TcpListener::bind(addr).await?;
     info!(%addr, "listening");
 
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    // シャットダウン信号 → serve の drain トリガを oneshot で繋ぎ、
+    // さらに GRACEFUL_SHUTDOWN_SECS の deadline を被せる。
+    let (trigger_tx, trigger_rx) = tokio::sync::oneshot::channel::<()>();
+    let serve = axum::serve(listener, router).with_graceful_shutdown(async move {
+        let _ = trigger_rx.await;
+    });
+    let deadline = async move {
+        shutdown_signal().await;
+        let _ = trigger_tx.send(());
+        tokio::time::sleep(Duration::from_secs(GRACEFUL_SHUTDOWN_SECS)).await;
+    };
 
-    info!("server stopped");
+    tokio::select! {
+        result = serve => {
+            result?;
+            info!("server stopped");
+        }
+        () = deadline => {
+            warn!(
+                "graceful shutdown exceeded {GRACEFUL_SHUTDOWN_SECS}s — forcing exit"
+            );
+        }
+    }
     Ok(())
 }
 
@@ -122,7 +149,7 @@ async fn shutdown_signal() {
     let terminate = std::future::pending::<()>();
 
     tokio::select! {
-        _ = ctrl_c => info!("SIGINT received, shutting down"),
-        _ = terminate => info!("SIGTERM received, shutting down"),
+        () = ctrl_c => info!("SIGINT received, shutting down"),
+        () = terminate => info!("SIGTERM received, shutting down"),
     }
 }
