@@ -230,6 +230,29 @@ pub fn read_all_tasks(conn: &Connection) -> Result<Vec<Task>, Error> {
     read_tasks_since(conn, "")
 }
 
+/// Read a single task by its `id` (= SQLite rowid = `task_number`).
+///
+/// 存在しなければ `Ok(None)`。POST (T5) / PATCH (T6) のレスポンスで
+/// "書き込み直後に最新の値を読み戻して返す" のと、GET `/:n` (T4) で使う。
+pub fn read_task_by_id(conn: &Connection, id: i64) -> Result<Option<Task>, Error> {
+    let result = conn.query_row(
+        "SELECT
+             t.id, t.title, t.status, t.source,
+             p.name AS project_name,
+             t.due, t.done_at, t.created, t.updated, t.important
+         FROM tasks t
+         LEFT JOIN projects p ON t.project_id = p.id
+         WHERE t.id = ?1",
+        params![id],
+        row_to_task,
+    );
+    match result {
+        Ok(task) => Ok(Some(task)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(Error::Sqlite(e)),
+    }
+}
+
 /// Read tasks with optional filters for `GET /api/tasks`.
 ///
 /// * `status`: exact match on `tasks.status` (`open` / `done` / `closed`).
@@ -277,6 +300,25 @@ pub fn read_tasks_filtered(
 // ------------------------------------------------------------------
 // task_reminds
 // ------------------------------------------------------------------
+
+/// Replace all `task_reminds` rows for `task_id` with the given `dates`.
+///
+/// DELETE → INSERT を 1 セットで行う。POST (T5) は既存行 0 から INSERT、
+/// PATCH (T6) は既存行を差し替える用途。呼び出し側は transaction 内で
+/// 使うことを推奨 (部分失敗で中間状態が残らないように)。
+pub fn replace_reminds(conn: &Connection, task_id: i64, dates: &[NaiveDate]) -> Result<(), Error> {
+    conn.execute(
+        "DELETE FROM task_reminds WHERE task_id = ?1",
+        params![task_id],
+    )?;
+    for d in dates {
+        conn.execute(
+            "INSERT INTO task_reminds (task_id, remind_at) VALUES (?1, ?2)",
+            params![task_id, format_date(*d)],
+        )?;
+    }
+    Ok(())
+}
 
 /// Group reminds by `task_id` for the given task ids.
 ///

@@ -47,8 +47,8 @@ impl AppState {
 /// 401 より先に 404 として漏れるのを防ぐ。
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
-        .route("/tasks", get(tasks::list_tasks))
-        // T4〜T7 のハンドラは順次ここに追加される。
+        .route("/tasks", get(tasks::list_tasks).post(tasks::create_task))
+        // T4 (GET /:n) / T6 (PATCH /:n) / T7 (GET /api/projects) は順次追加。
         .fallback(api_not_found)
         .layer(middleware::from_fn_with_state(
             state.clone(),

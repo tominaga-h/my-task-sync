@@ -55,13 +55,16 @@
 
 ## T5. POST /api/tasks
 
-- [ ] `src/sqlite.rs` に `replace_reminds(conn, task_id, &[NaiveDate])`
-- [ ] `src/http/tasks.rs` に `create_task` ハンドラ (unchecked_transaction でまとめる)
-- [ ] body に `taskNumber` が来たら 400
-- [ ] ルート登録: `post(create_task)`
-- [ ] 単体テスト: 最小 body → rowid=1 / project 透過作成 / reminds 複数 / taskNumber 混入 → 400 / 不正 status → 400
+- [x] `src/sqlite.rs` に `replace_reminds(conn, task_id, &[NaiveDate])` + `read_task_by_id(conn, id) -> Option<Task>` (後者は T4 から前倒し — POST の書き戻し返却で必要)
+- [x] `src/model.rs` に `TaskCreateDto` (body 用、`taskNumber` 含まず) + `TaskResponse { task, serverTime }`
+- [x] `src/http/tasks.rs` に `create_task` ハンドラ (Value 受け → taskNumber 検出で 400 → TaskCreateDto parse → status 許容値チェック → unchecked_transaction で INSERT + replace_reminds → read_task_by_id で書き戻し)
+- [x] body に `taskNumber` が来たら 400 (サーバー採番の約束)
+- [x] ルート登録: `/api/tasks` に `.post(create_task)` 追加
+- [x] 結合テスト (http_tasks_test.rs) 9 件追加: 201+rowid=1 / GET で見える / project 透過作成 / reminds 複数 / 連続採番 / taskNumber 混入 → 400 / 不正 status → 400 / title 欠落 → 400 / 認証なし → 401
+- [x] `make check` 全緑 — 合計 64 テスト
+- [x] 実バイナリ smoke test (mock tasks.db): 5 ケース全て期待どおり
 
-→ **CP3 レビュー (初 write 経路の schema 整合性)**
+→ **CP3 (初 write 経路の schema 整合性)** — レビュー対象
 
 ## T6. PATCH /api/tasks/:task_number
 

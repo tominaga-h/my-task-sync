@@ -111,6 +111,36 @@ pub struct TaskListResponse {
     pub server_time: DateTime<Utc>,
 }
 
+/// `POST /api/tasks` body / `PATCH /api/tasks/:n` body (後者は T6)。
+/// `taskNumber` は含めない — サーバーが SQLite rowid を採番する約束。
+/// body に `taskNumber` が含まれていたら 400 (ハンドラ側で検出)。
+///
+/// `important` / `reminds` は省略可 (デフォルト false / 空配列)。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskCreateDto {
+    pub title: String,
+    pub status: String,
+    pub source: String,
+    pub project_name: Option<String>,
+    pub due: Option<NaiveDate>,
+    pub done_at: Option<NaiveDate>,
+    #[serde(default)]
+    pub important: bool,
+    pub updated_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub reminds: Vec<NaiveDate>,
+}
+
+/// `GET /:n` / `POST` / `PATCH` のレスポンス共通形。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskResponse {
+    pub task: TaskDto,
+    pub server_time: DateTime<Utc>,
+}
+
 fn date_to_dt(d: NaiveDate) -> DateTime<Utc> {
     d.and_hms_opt(0, 0, 0)
         .expect("00:00:00 is a valid wall time")

@@ -1,17 +1,21 @@
 //! `/api/tasks` ハンドラ。
 //!
-//! Phase 1 T3 ではリスト取得 (`GET /api/tasks`) だけを実装する。
-//! `/:task_number` (T4) / `POST` (T5) / `PATCH` (T6) は後続タスクで追加。
+//! Phase 1:
+//!   * T3: `GET  /api/tasks` (list + filters)
+//!   * T5: `POST /api/tasks` (create — サーバーが rowid = task_number を採番)
+//!
+//! T4 `GET /:n` / T6 `PATCH /:n` は後続タスクで追加。
 
 use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use super::AppState;
 use crate::error::Error;
-use crate::model::{TaskDto, TaskListResponse};
-use crate::sqlite;
+use crate::model::{TaskCreateDto, TaskDto, TaskListResponse, TaskResponse};
+use crate::sqlite::{self, TaskRow};
 
 const ALLOWED_STATUSES: &[&str] = &["open", "done", "closed"];
 /// `limit` 未指定時にかぶせるデフォルト上限。意図的に全件欲しい場合は
@@ -93,4 +97,76 @@ pub async fn list_tasks(
         tasks: dtos,
         server_time: Utc::now(),
     }))
+}
+
+// ----------------------------------------------------------------------
+// POST /api/tasks (T5)
+// ----------------------------------------------------------------------
+
+/// 新規 task を作成し、採番された `taskNumber` 入りの完全な DTO を返す。
+///
+/// body の `taskNumber` はサーバー採番の約束 (docs/SERVER_DESIGN.md) を
+/// 守るため明示的に拒否する (400)。parse 時に deny_unknown_fields を
+/// 使わないのは、error response を 400 にしたいためで、axum の
+/// `Json<T>` 抽出器が返す 422 では仕様と合わない。Value で受けてから
+/// 手動 validate → TaskCreateDto にマッピングする。
+pub async fn create_task(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<(StatusCode, Json<TaskResponse>), Error> {
+    if body.get("taskNumber").is_some() {
+        return Err(Error::BadRequest(
+            "taskNumber must not be in request body (server assigns SQLite rowid)".into(),
+        ));
+    }
+
+    let dto: TaskCreateDto = serde_json::from_value(body)
+        .map_err(|e| Error::BadRequest(format!("invalid task body: {e}")))?;
+
+    if !ALLOWED_STATUSES.contains(&dto.status.as_str()) {
+        return Err(Error::BadRequest(format!(
+            "invalid status {:?}: expected one of {:?}",
+            dto.status, ALLOWED_STATUSES
+        )));
+    }
+
+    // INSERT + reminds を 1 トランザクションにまとめる。reminds の途中で
+    // 失敗したら task 本体も rollback されるので、DB に中間状態が残らない。
+    let (task, reminds) = {
+        let conn = state
+            .conn
+            .lock()
+            .map_err(|_| Error::Config("sqlite mutex poisoned".into()))?;
+        let tx = conn.unchecked_transaction()?;
+        let row = TaskRow {
+            title: &dto.title,
+            status: &dto.status,
+            source: &dto.source,
+            project: dto.project_name.as_deref(),
+            due: dto.due,
+            done_at: dto.done_at,
+            created: dto.created_at.date_naive(),
+            updated: dto.updated_at.date_naive(),
+            important: dto.important,
+        };
+        let id = sqlite::insert_task_row(&tx, &row, None)?;
+        sqlite::replace_reminds(&tx, id, &dto.reminds)?;
+        tx.commit()?;
+
+        // 書き戻し直後の行を読み直して返す (project 透過作成や status の
+        // 正規化が反映された状態でクライアントに渡すため)。
+        let task = sqlite::read_task_by_id(&conn, id)?
+            .ok_or_else(|| Error::Config("just-inserted task disappeared from SQLite".into()))?;
+        let reminds_map = sqlite::read_reminds_for_tasks(&conn, &[id])?;
+        let reminds = reminds_map.get(&id).cloned().unwrap_or_default();
+        (task, reminds)
+    };
+
+    Ok((
+        StatusCode::CREATED,
+        Json(TaskResponse {
+            task: TaskDto::from_task(task, reminds),
+            server_time: Utc::now(),
+        }),
+    ))
 }

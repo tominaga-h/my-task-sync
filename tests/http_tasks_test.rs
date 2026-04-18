@@ -1,18 +1,19 @@
-//! `GET /api/tasks` 結合テスト。
+//! `/api/tasks` 結合テスト (GET + POST)。
 //!
 //! axum Router を `oneshot` で叩き、in-memory SQLite を state に渡して
 //! response の status + JSON body を検証する。認証は Bearer token 込み
 //! (T2 middleware が通ること前提)。
 //!
-//! `common/mod.rs` は my-task 本物スキーマの in-memory DB を提供する。
+//! `common/mod.rs` は my-task 本物スキーマの in-memory DB を提供する
+//! (実ファイルの tasks.db は一切触らない)。
 
 mod common;
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{Method, Request, StatusCode};
 use common::{insert_raw_task, make_my_task_db};
 use rusqlite::Connection;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use my_task_sync::http::{router, AppState};
@@ -37,8 +38,29 @@ fn authed_get(uri: &str) -> Request<Body> {
         .expect("build request")
 }
 
+fn authed_post(uri: &str, body: Value) -> Request<Body> {
+    Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header("Authorization", format!("Bearer {API_KEY}"))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .expect("build request")
+}
+
 fn app_with(conn: Connection) -> axum::Router {
     router(AppState::new(conn, API_KEY.into()))
+}
+
+/// POST 用の最小 body。テストで差分を付けたい箇所だけ上書きする。
+fn minimal_create_body() -> Value {
+    json!({
+        "title": "new task",
+        "status": "open",
+        "source": "web",
+        "createdAt": "2026-04-18T10:00:00Z",
+        "updatedAt": "2026-04-18T10:00:00Z"
+    })
 }
 
 /// 3 件の multipurpose seed:
@@ -325,4 +347,168 @@ async fn invalid_limit_type_returns_400_via_query_extractor() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+// ---------- POST /api/tasks (T5) ----------
+
+#[tokio::test]
+async fn post_minimal_body_returns_201_with_assigned_task_number() {
+    let conn = make_my_task_db();
+    let app = app_with(conn);
+
+    let resp = app
+        .oneshot(authed_post("/api/tasks", minimal_create_body()))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let body = body_json(resp).await;
+    // 採番された rowid = 1 (最初の INSERT)
+    assert_eq!(body["task"]["taskNumber"], 1);
+    assert_eq!(body["task"]["title"], "new task");
+    assert_eq!(body["task"]["status"], "open");
+    assert_eq!(body["task"]["source"], "web");
+    assert!(body["task"]["projectName"].is_null());
+    assert_eq!(body["task"]["reminds"].as_array().unwrap().len(), 0);
+    assert!(body["serverTime"].is_string());
+}
+
+#[tokio::test]
+async fn post_persists_row_visible_in_subsequent_get() {
+    let conn = make_my_task_db();
+    let app = app_with(conn);
+
+    let created_resp = app
+        .clone()
+        .oneshot(authed_post("/api/tasks", minimal_create_body()))
+        .await
+        .unwrap();
+    assert_eq!(created_resp.status(), StatusCode::CREATED);
+
+    // GET で同じ task が返ってくる
+    let list = body_json(app.oneshot(authed_get("/api/tasks")).await.unwrap()).await;
+    let tasks = list["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0]["title"], "new task");
+    assert_eq!(tasks[0]["taskNumber"], 1);
+}
+
+#[tokio::test]
+async fn post_with_project_name_transparently_creates_project() {
+    let conn = make_my_task_db();
+    let app = app_with(conn);
+
+    let mut body = minimal_create_body();
+    body["projectName"] = json!("brand-new-proj");
+
+    let resp = app.oneshot(authed_post("/api/tasks", body)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let body = body_json(resp).await;
+    assert_eq!(body["task"]["projectName"], "brand-new-proj");
+}
+
+#[tokio::test]
+async fn post_with_reminds_persists_all_reminds() {
+    let conn = make_my_task_db();
+    let app = app_with(conn);
+
+    let mut body = minimal_create_body();
+    body["reminds"] = json!(["2026-04-20", "2026-04-25", "2026-05-01"]);
+
+    let resp = app.oneshot(authed_post("/api/tasks", body)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let body = body_json(resp).await;
+    let reminds = body["task"]["reminds"].as_array().unwrap();
+    assert_eq!(reminds.len(), 3);
+    assert_eq!(reminds[0], "2026-04-20");
+    assert_eq!(reminds[1], "2026-04-25");
+    assert_eq!(reminds[2], "2026-05-01");
+}
+
+#[tokio::test]
+async fn post_assigns_sequential_rowids() {
+    let conn = make_my_task_db();
+    let app = app_with(conn);
+
+    let r1 = app
+        .clone()
+        .oneshot(authed_post("/api/tasks", minimal_create_body()))
+        .await
+        .unwrap();
+    let r2 = app
+        .oneshot(authed_post("/api/tasks", minimal_create_body()))
+        .await
+        .unwrap();
+    let b1 = body_json(r1).await;
+    let b2 = body_json(r2).await;
+    assert_eq!(b1["task"]["taskNumber"], 1);
+    assert_eq!(b2["task"]["taskNumber"], 2);
+}
+
+// ---------- POST 400 paths ----------
+
+#[tokio::test]
+async fn post_with_task_number_in_body_returns_400() {
+    // サーバー採番の約束: body に taskNumber を入れたら 400。
+    let conn = make_my_task_db();
+    let app = app_with(conn);
+
+    let mut body = minimal_create_body();
+    body["taskNumber"] = json!(99);
+
+    let resp = app.oneshot(authed_post("/api/tasks", body)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let err = body_json(resp).await;
+    assert!(err["error"].as_str().unwrap().contains("taskNumber"));
+}
+
+#[tokio::test]
+async fn post_with_invalid_status_returns_400() {
+    let conn = make_my_task_db();
+    let app = app_with(conn);
+
+    let mut body = minimal_create_body();
+    body["status"] = json!("wibble");
+
+    let resp = app.oneshot(authed_post("/api/tasks", body)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let err = body_json(resp).await;
+    assert!(err["error"].as_str().unwrap().contains("status"));
+}
+
+#[tokio::test]
+async fn post_missing_required_title_returns_400() {
+    let conn = make_my_task_db();
+    let app = app_with(conn);
+
+    // title を落とす
+    let body = json!({
+        "status": "open",
+        "source": "web",
+        "createdAt": "2026-04-18T10:00:00Z",
+        "updatedAt": "2026-04-18T10:00:00Z"
+    });
+
+    let resp = app.oneshot(authed_post("/api/tasks", body)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn post_without_auth_returns_401() {
+    let conn = make_my_task_db();
+    let app = app_with(conn);
+
+    // Authorization ヘッダなしで POST
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/tasks")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&minimal_create_body()).unwrap(),
+        ))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
