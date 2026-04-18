@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use axum::http::StatusCode;
 use axum::{middleware, routing::get, Router};
 use rusqlite::Connection;
+use tower_http::trace::TraceLayer;
 
 pub mod auth;
 pub mod tasks;
@@ -57,6 +58,10 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .nest("/api", api)
+        // `TraceLayer` はすべてのリクエストに DEBUG 以上で request/response
+        // のログを出す。5xx 時の tracing::error と組み合わせて "どのパス・
+        // どのメソッドで落ちたか" を追えるようにする。
+        .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
 

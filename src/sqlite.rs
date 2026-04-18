@@ -234,7 +234,10 @@ pub fn read_all_tasks(conn: &Connection) -> Result<Vec<Task>, Error> {
 ///
 /// * `status`: exact match on `tasks.status` (`open` / `done` / `closed`).
 ///   validation はハンドラ側で行う想定 — ここは SQL に渡すだけ。
-/// * `since`: `tasks.updated > since` を満たす行のみ (strict comparison)。
+/// * `since`: `tasks.updated >= since` を満たす行のみ (inclusive 比較)。
+///   SQLite 側の `updated` は `YYYY-MM-DD` (日単位) なので、ハンドラは
+///   DateTime<Utc> を受け取ってから `date_naive()` で truncate してここへ
+///   渡す想定。同日の重複受信はクライアント側で `task_number` dedup。
 /// * `project`: JOIN 後の `projects.name` に完全一致。`None` のときは
 ///   project フィルタを掛けず、project 無しのタスクも含めて返す。
 /// * `limit`: 行数上限。`None` は無制限 (SQLite の `LIMIT -1`)。
@@ -258,7 +261,7 @@ pub fn read_tasks_filtered(
          FROM tasks t
          LEFT JOIN projects p ON t.project_id = p.id
          WHERE (?1 IS NULL OR t.status = ?1)
-           AND (?2 IS NULL OR t.updated > ?2)
+           AND (?2 IS NULL OR t.updated >= ?2)
            AND (?3 IS NULL OR p.name = ?3)
          ORDER BY t.id
          LIMIT ?4",

@@ -143,16 +143,36 @@ async fn status_filter_returns_only_matching_rows() {
 }
 
 #[tokio::test]
-async fn since_filter_is_strict_greater_than() {
+async fn since_filter_is_inclusive_at_same_day_boundary() {
+    // since=2026-04-10T00:00:00Z は "同日" を含む (inclusive)。SQLite の
+    // updated は日単位なので、クライアントが前回の serverTime を投げ戻した
+    // ときに同日内の追加更新を取りこぼさないようにするのが意図。
     let conn = make_my_task_db();
     seed_three_tasks(&conn);
     let app = app_with(conn);
 
-    // t1.updated = 2026-04-10 → since=2026-04-10 では除外 (strict)
-    // t2.updated = 2026-04-12 → 含まれる
-    // t3.updated = 2026-04-14 → 含まれる
     let body = body_json(
-        app.oneshot(authed_get("/api/tasks?since=2026-04-10"))
+        app.oneshot(authed_get("/api/tasks?since=2026-04-10T00:00:00Z"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let tasks = body["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 3);
+    assert_eq!(tasks[0]["title"], "t1");
+    assert_eq!(tasks[1]["title"], "t2");
+    assert_eq!(tasks[2]["title"], "t3");
+}
+
+#[tokio::test]
+async fn since_filter_excludes_earlier_days() {
+    // since=2026-04-11T... は t1 (updated=2026-04-10) を除外、t2/t3 は含む。
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    let body = body_json(
+        app.oneshot(authed_get("/api/tasks?since=2026-04-11T23:59:59Z"))
             .await
             .unwrap(),
     )
@@ -161,6 +181,32 @@ async fn since_filter_is_strict_greater_than() {
     assert_eq!(tasks.len(), 2);
     assert_eq!(tasks[0]["title"], "t2");
     assert_eq!(tasks[1]["title"], "t3");
+}
+
+#[tokio::test]
+async fn since_truncates_to_date_ignoring_time_component() {
+    // 同じ日のどの時刻を投げても同じ結果。time 部分は SQLite 日単位粒度
+    // で切り捨てられるため、同日内の 00:00 も 23:59 も挙動が同じ。
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    let early = body_json(
+        app.oneshot(authed_get("/api/tasks?since=2026-04-12T00:00:00Z"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let conn2 = make_my_task_db();
+    seed_three_tasks(&conn2);
+    let app2 = app_with(conn2);
+    let late = body_json(
+        app2.oneshot(authed_get("/api/tasks?since=2026-04-12T23:59:59Z"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(early["tasks"], late["tasks"]);
 }
 
 #[tokio::test]
@@ -192,6 +238,19 @@ async fn limit_caps_the_row_count() {
     assert_eq!(tasks.len(), 2);
     assert_eq!(tasks[0]["title"], "t1");
     assert_eq!(tasks[1]["title"], "t2");
+}
+
+#[tokio::test]
+async fn limit_zero_returns_empty_array() {
+    // `?limit=0` は 0 件を明示的に要求する。DEFAULT_LIMIT に退化していない
+    // ことの regression guard。
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    let body = body_json(app.oneshot(authed_get("/api/tasks?limit=0")).await.unwrap()).await;
+    let tasks = body["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 0);
 }
 
 #[tokio::test]
@@ -229,7 +288,7 @@ async fn invalid_status_returns_400() {
 }
 
 #[tokio::test]
-async fn invalid_since_date_returns_400() {
+async fn invalid_since_non_iso_returns_400() {
     let conn = make_my_task_db();
     let app = app_with(conn);
 
@@ -240,6 +299,19 @@ async fn invalid_since_date_returns_400() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body = body_json(resp).await;
     assert!(body["error"].as_str().unwrap().contains("since"));
+}
+
+#[tokio::test]
+async fn invalid_since_date_only_rejected() {
+    // I3 の決定: since は RFC 3339 datetime のみ。YYYY-MM-DD 単独は 400。
+    let conn = make_my_task_db();
+    let app = app_with(conn);
+
+    let resp = app
+        .oneshot(authed_get("/api/tasks?since=2026-04-10"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

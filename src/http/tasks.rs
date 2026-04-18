@@ -5,7 +5,7 @@
 
 use axum::extract::{Query, State};
 use axum::Json;
-use chrono::{NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use super::AppState;
@@ -13,8 +13,10 @@ use crate::error::Error;
 use crate::model::{TaskDto, TaskListResponse};
 use crate::sqlite;
 
-const DATE_FMT: &str = "%Y-%m-%d";
 const ALLOWED_STATUSES: &[&str] = &["open", "done", "closed"];
+/// `limit` 未指定時にかぶせるデフォルト上限。意図的に全件欲しい場合は
+/// クライアント側で `?limit=<大きめの数>` を指定する。
+const DEFAULT_LIMIT: u32 = 500;
 
 /// `GET /api/tasks` のクエリパラメータ。どれも optional。
 #[derive(Debug, Deserialize, Default)]
@@ -39,14 +41,27 @@ pub async fn list_tasks(
         }
     }
 
-    // since は YYYY-MM-DD の日付にパース。parse 失敗は 400。
-    let since =
-        match params.since.as_deref() {
-            Some(s) => Some(NaiveDate::parse_from_str(s, DATE_FMT).map_err(|_| {
-                Error::BadRequest(format!("invalid since {s:?}: expected YYYY-MM-DD"))
-            })?),
-            None => None,
-        };
+    // since は RFC 3339 datetime (= レスポンスの `serverTime` と同形式)。
+    // クライアントが前回の `serverTime` をそのまま投げ戻せることを優先して
+    // `YYYY-MM-DD` 単独は受け付けない (フォーマット分岐を増やさない)。
+    // SQLite の `updated` は日単位なので、内部では UTC の日付に truncate。
+    let since = match params.since.as_deref() {
+        Some(s) => Some(
+            DateTime::parse_from_rfc3339(s)
+                .map_err(|_| {
+                    Error::BadRequest(format!(
+                        "invalid since {s:?}: expected RFC 3339 datetime \
+                         (e.g. 2026-04-18T13:00:00Z)"
+                    ))
+                })?
+                .with_timezone(&Utc)
+                .date_naive(),
+        ),
+        None => None,
+    };
+
+    // limit 未指定は DEFAULT_LIMIT で蓋をする (DoS 回避)。
+    let limit = Some(params.limit.unwrap_or(DEFAULT_LIMIT));
 
     // Mutex を短時間 (SQL 2 本分) だけ保持し、`.await` はまたがない。
     let (tasks, reminds_map) = {
@@ -59,7 +74,7 @@ pub async fn list_tasks(
             params.status.as_deref(),
             since,
             params.project.as_deref(),
-            params.limit,
+            limit,
         )?;
         let ids: Vec<i64> = tasks.iter().map(|t| t.id).collect();
         let reminds = sqlite::read_reminds_for_tasks(&conn, &ids)?;
