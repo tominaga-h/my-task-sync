@@ -1,16 +1,15 @@
 # my-task-sync — example configuration
 #
 # Copy to ~/.config/my-task-sync/config.toml and edit `api_key`.
-# Environment variables (MY_TASK_SYNC_API_KEY / MY_TASK_SYNC_BASE_URL /
+# Environment variables (MY_TASK_SYNC_API_KEY / MY_TASK_SYNC_PORT /
 # MY_TASK_DATA_FILE) take precedence over the values below.
 
 [sqlite]
 # my-task の SQLite パス (省略時: $XDG_DATA_HOME/my-task/tasks.db)
 # path = "/custom/path/tasks.db"
 
-[api]
-base_url = "https://my-own-app.vercel.app"
+[server]
+port    = 3333
 api_key = "your-api-key-here"
 
-[sync]
-interval_seconds = 30
+# [ngrok] section is added in Phase 2.

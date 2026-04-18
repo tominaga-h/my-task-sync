@@ -1,17 +1,16 @@
 //! Configuration: TOML file → environment overrides → CLI flags.
 //!
-//! `OVERVIEW.md` § 設定の解決順序 に従う:
-//! 1. `~/.config/my-task-sync/config.toml` (or `--config <path>`)
-//! 2. 環境変数 `MY_TASK_SYNC_API_KEY` / `MY_TASK_SYNC_BASE_URL`
-//! 3. CLI 引数 `--config`
+//! Resolution order:
+//! 1. TOML file (`--config <path>` or `$XDG_CONFIG_HOME/my-task-sync/config.toml`)
+//! 2. Environment variables (`MY_TASK_SYNC_API_KEY` / `MY_TASK_SYNC_PORT` /
+//!    `MY_TASK_DATA_FILE`) — override individual fields
 //!
-//! SQLite path resolution:
+//! SQLite path:
 //! 1. `MY_TASK_DATA_FILE` env
 //! 2. `[sqlite].path` from TOML
 //! 3. `dirs::data_dir()/my-task/tasks.db`
 //!
-//! Missing `api_key` / `base_url` is a `ConfigError` — never silently
-//! filled in (Fail Fast).
+//! Missing `api_key` is a `ConfigError` — never silently filled in (Fail Fast).
 
 use std::path::{Path, PathBuf};
 
@@ -19,39 +18,34 @@ use serde::Deserialize;
 
 use crate::error::Error;
 
-/// Default sync interval when `[sync].interval_seconds` is not set.
-const DEFAULT_INTERVAL_SECONDS: u64 = 30;
+/// Default bind port when `[server].port` is not set.
+const DEFAULT_PORT: u16 = 3333;
 
 // ------------------------------------------------------------------
 // CLI
 // ------------------------------------------------------------------
 
-/// Parsed CLI flags.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Cli {
     pub config_path: Option<PathBuf>,
-    pub once: bool,
-    pub dry_run: bool,
     pub help: bool,
 }
 
 /// Parse `argv` (including the program name as the first element) into a [`Cli`].
 ///
-/// Unknown flags are rejected (Fail Fast) — silently ignoring would let
-/// typos go undetected.
+/// Unknown flags are rejected — silently ignoring would let typos go undetected.
+/// v1 flags `--once` and `--dry-run` are intentionally not accepted; they fall
+/// through to the "unknown flag" path so stale launchctl plists fail loudly.
 pub fn parse_cli_args<I>(args: I) -> Result<Cli, Error>
 where
     I: IntoIterator<Item = String>,
 {
     let mut iter = args.into_iter();
-    // skip the program name; if missing we still parse the empty arg list
     let _ = iter.next();
 
     let mut cli = Cli::default();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
-            "--once" => cli.once = true,
-            "--dry-run" => cli.dry_run = true,
             "--help" | "-h" => cli.help = true,
             "--config" => {
                 let value = iter
@@ -74,10 +68,7 @@ where
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
     pub sqlite: SqliteConfig,
-    pub api: ApiConfig,
-    pub sync: SyncConfig,
-    pub once: bool,
-    pub dry_run: bool,
+    pub server: ServerConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -86,14 +77,9 @@ pub struct SqliteConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct ApiConfig {
-    pub base_url: String,
+pub struct ServerConfig {
+    pub port: u16,
     pub api_key: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct SyncConfig {
-    pub interval_seconds: u64,
 }
 
 // ------------------------------------------------------------------
@@ -105,9 +91,7 @@ struct FileConfig {
     #[serde(default)]
     sqlite: Option<FileSqlite>,
     #[serde(default)]
-    api: Option<FileApi>,
-    #[serde(default)]
-    sync: Option<FileSync>,
+    server: Option<FileServer>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -116,65 +100,45 @@ struct FileSqlite {
 }
 
 #[derive(Debug, Deserialize)]
-struct FileApi {
-    base_url: Option<String>,
+struct FileServer {
+    port: Option<u16>,
     api_key: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct FileSync {
-    interval_seconds: Option<u64>,
 }
 
 // ------------------------------------------------------------------
 // resolve()
 // ------------------------------------------------------------------
 
-/// Resolve the final configuration from CLI + env + config file.
-///
-/// The CLI struct decides which file to read (explicit `--config <path>`
-/// wins; otherwise the well-known location is consulted but missing is
-/// not an error). Env then overrides individual fields, and the function
-/// validates that required fields are present.
 pub fn resolve(cli: Cli) -> Result<ResolvedConfig, Error> {
     let file = load_file_config(cli.config_path.as_deref())?;
 
     let api_key = std::env::var("MY_TASK_SYNC_API_KEY")
         .ok()
         .filter(|s| !s.is_empty())
-        .or_else(|| file.api.as_ref().and_then(|a| a.api_key.clone()))
+        .or_else(|| file.server.as_ref().and_then(|s| s.api_key.clone()))
         .ok_or_else(|| {
             Error::Config(
-                "api_key is not set (provide [api].api_key in config or MY_TASK_SYNC_API_KEY env)"
+                "api_key is not set (provide [server].api_key in config or MY_TASK_SYNC_API_KEY env)"
                     .into(),
             )
         })?;
 
-    let base_url = std::env::var("MY_TASK_SYNC_BASE_URL")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| file.api.as_ref().and_then(|a| a.base_url.clone()))
-        .ok_or_else(|| {
-            Error::Config(
-                "base_url is not set (provide [api].base_url in config or MY_TASK_SYNC_BASE_URL env)"
-                    .into(),
-            )
-        })?;
-
-    let interval_seconds = file
-        .sync
-        .as_ref()
-        .and_then(|s| s.interval_seconds)
-        .unwrap_or(DEFAULT_INTERVAL_SECONDS);
+    let port = match std::env::var("MY_TASK_SYNC_PORT") {
+        Ok(s) if !s.is_empty() => s
+            .parse::<u16>()
+            .map_err(|e| Error::Config(format!("MY_TASK_SYNC_PORT is not a valid port: {e}")))?,
+        _ => file
+            .server
+            .as_ref()
+            .and_then(|s| s.port)
+            .unwrap_or(DEFAULT_PORT),
+    };
 
     let sqlite_path = resolve_sqlite_path(file.sqlite.as_ref().and_then(|s| s.path.as_deref()))?;
 
     Ok(ResolvedConfig {
         sqlite: SqliteConfig { path: sqlite_path },
-        api: ApiConfig { base_url, api_key },
-        sync: SyncConfig { interval_seconds },
-        once: cli.once,
-        dry_run: cli.dry_run,
+        server: ServerConfig { port, api_key },
     })
 }
 
@@ -218,13 +182,4 @@ fn resolve_sqlite_path(file_path: Option<&str>) -> Result<PathBuf, Error> {
         )
     })?;
     Ok(dir.join("my-task").join("tasks.db"))
-}
-
-/// Default state.db path (`$XDG_CONFIG_HOME/my-task-sync/state.db`).
-///
-/// Used by the binary; tests pass an explicit path to `SyncState::open`.
-pub fn default_state_db_path() -> Result<PathBuf, Error> {
-    let dir = dirs::config_dir()
-        .ok_or_else(|| Error::Config("config_dir is not available on this platform".into()))?;
-    Ok(dir.join("my-task-sync").join("state.db"))
 }

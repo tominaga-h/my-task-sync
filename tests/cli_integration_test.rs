@@ -1,11 +1,11 @@
 //! CLI 統合テスト。
 //!
-//! 実 API は叩かず、プロセス起動とフラグ解釈のみを検証する。
+//! 実際にサーバーは bind せず、プロセス起動とフラグ解釈のみを検証する。
+//! (ネットワーク bind を伴う結合テストは `tasks/plan.md` T8 の手動 checklist。)
 //!
 //! 検証対象:
 //!   * `--help` が 0 終了で usage を出力する
-//!   * `--once --dry-run` で設定ファイルが無ければ非ゼロ終了 (panic せず)
-//!   * `--config <存在しないパス>` も非ゼロ終了 (panic せず)
+//!   * 設定が欠けていれば非ゼロ終了 (panic せず)
 //!   * 未知のフラグは非ゼロ終了
 
 use std::process::Command;
@@ -39,22 +39,20 @@ fn help_flag_prints_usage_and_exits_zero() {
 }
 
 #[test]
-fn once_dry_run_without_config_exits_non_zero_gracefully() {
+fn missing_config_exits_non_zero_gracefully() {
     // Given: 設定ファイルを無効なパスにし、env も空にする
     let tmp = tempfile::tempdir().unwrap();
     let bogus_config = tmp.path().join("does-not-exist.toml");
 
-    // When: api_key / base_url の設定源が一切ない状態
+    // When: api_key の設定源が一切ない状態
     let output = Command::new(bin_path())
-        .arg("--once")
-        .arg("--dry-run")
         .arg("--config")
         .arg(&bogus_config)
         .env_remove("MY_TASK_SYNC_API_KEY")
-        .env_remove("MY_TASK_SYNC_BASE_URL")
+        .env_remove("MY_TASK_SYNC_PORT")
         .env_remove("MY_TASK_DATA_FILE")
         .output()
-        .expect("run daemon");
+        .expect("run server");
 
     // Then: panic せず、非ゼロ終了
     assert!(

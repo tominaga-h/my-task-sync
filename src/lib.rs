@@ -1,15 +1,10 @@
 //! my-task-sync library crate.
 //!
-//! This crate is consumed by both the `my-task-sync` binary and the
-//! integration tests under `tests/`. The module layout matches
-//! `docs/OVERVIEW.md` § リポジトリ構成.
+//! v2 backend server: axum HTTP server backed by the my-task SQLite.
+//! See `docs/SERVER_DESIGN.md` for the full design.
 
-#![allow(async_fn_in_trait)]
-
-pub mod api_client;
 pub mod config;
 pub mod error;
+pub mod http;
 pub mod model;
 pub mod sqlite;
-pub mod sync_engine;
-pub mod sync_state;
