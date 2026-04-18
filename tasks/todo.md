@@ -48,10 +48,14 @@
 
 ## T4. GET /api/tasks/:task_number
 
-- [ ] `src/sqlite.rs` に `read_task_by_id`
-- [ ] `src/model.rs` に `TaskResponse`
-- [ ] `src/http/tasks.rs` に `get_task` ハンドラ + ルート登録
-- [ ] 単体テスト: 存在 / 不在 404 / 非数値 path 400
+- [x] `src/sqlite.rs` の `read_task_by_id` (T5 で前倒し済み) を流用
+- [x] `src/model.rs` の `TaskResponse` (T5 で前倒し済み) を流用
+- [x] `src/http/tasks.rs` に `get_task` ハンドラ追加
+- [x] `src/http/mod.rs` のルートを `get(get_task).patch(patch_task)` に合成 (axum 0.8 の MethodRouter チェイン)
+- [x] 結合テスト (http_tasks_test.rs) 7 件追加: 存在 (reminds + project 埋め込み) / projectName=null / reminds なし → [] / 不在 → 404 / 非数値 path → 400 / 認証なし → 401 / POST→GET round-trip
+- [x] `docs/API.md` に GET /:n セクション + 実装ステータス表更新
+- [x] `make check` 全緑 — 合計 92 件
+- [x] 実バイナリ smoke test (mock tasks.db): 4 ケース期待どおり (存在 / 不在 404 / 非数値 400 / 認証なし 401)
 
 ## T5. POST /api/tasks
 

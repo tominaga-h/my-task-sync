@@ -10,7 +10,7 @@
 use std::sync::{Arc, Mutex};
 
 use axum::http::StatusCode;
-use axum::routing::{get, patch};
+use axum::routing::get;
 use axum::{middleware, Router};
 use rusqlite::Connection;
 use tower_http::trace::TraceLayer;
@@ -50,9 +50,11 @@ impl AppState {
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/tasks", get(tasks::list_tasks).post(tasks::create_task))
-        .route("/tasks/{task_number}", patch(tasks::patch_task))
+        .route(
+            "/tasks/{task_number}",
+            get(tasks::get_task).patch(tasks::patch_task),
+        )
         .route("/projects", get(projects::list_projects))
-        // T4 (GET /:n) は後続。
         .fallback(api_not_found)
         .layer(middleware::from_fn_with_state(
             state.clone(),

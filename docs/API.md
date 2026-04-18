@@ -6,10 +6,10 @@
 > | ------------------------------- | ------------- | ----------- |
 > | `GET /healthz`                  | T1            | ✅ 実装済み |
 > | `GET /api/tasks`                | T3            | ✅ 実装済み |
+> | `GET /api/tasks/:task_number`   | T4            | ✅ 実装済み |
 > | `POST /api/tasks`               | T5            | ✅ 実装済み |
 > | `PATCH /api/tasks/:task_number` | T6            | ✅ 実装済み |
 > | `GET /api/projects`             | T7            | ✅ 実装済み |
-> | `GET /api/tasks/:task_number`   | T4            | ⏳ 未実装   |
 > | `GET /api/status`               | T11 (Phase 2) | ⏳ 未実装   |
 >
 > エンドポイントの追加・変更時はこのドキュメントも同時に更新すること。
@@ -109,6 +109,52 @@ curl -H "Authorization: Bearer $KEY" \
 
 # プロジェクトで絞り込み
 curl -H "Authorization: Bearer $KEY" "localhost:3333/api/tasks?project=home"
+```
+
+---
+
+## GET /api/tasks/:task_number
+
+単一タスクを取得する。
+
+### パスパラメータ
+
+- `task_number` — 対象タスクの ID (= SQLite rowid)。数値パース失敗時は `400`、
+  該当タスクが存在しなければ `404`。
+
+### レスポンス 200
+
+`POST` / `PATCH` と同じ `{ task, serverTime }` 形:
+
+```json
+{
+  "task": {
+    "taskNumber": 1,
+    "title": "buy milk",
+    "status": "open",
+    "source": "cli",
+    "projectName": "home",
+    "due": null,
+    "doneAt": null,
+    "important": false,
+    "updatedAt": "2026-04-18T00:00:00Z",
+    "createdAt": "2026-04-15T00:00:00Z",
+    "reminds": ["2026-04-22"]
+  },
+  "serverTime": "2026-04-18T23:21:22Z"
+}
+```
+
+### レスポンス 404
+
+```json
+{"error": "not found"}
+```
+
+### 例
+
+```bash
+curl -H "Authorization: Bearer $KEY" localhost:3333/api/tasks/1
 ```
 
 ---

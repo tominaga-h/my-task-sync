@@ -2,10 +2,9 @@
 //!
 //! Phase 1:
 //!   * T3: `GET   /api/tasks`           (list + filters)
+//!   * T4: `GET   /api/tasks/{n}`       (single fetch, 存在しなければ 404)
 //!   * T5: `POST  /api/tasks`           (create — サーバーが rowid = task_number を採番)
 //!   * T6: `PATCH /api/tasks/{n}`       (partial update, 存在しなければ 404)
-//!
-//! T4 `GET /{n}` は後続タスクで追加。
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -97,6 +96,35 @@ pub async fn list_tasks(
 
     Ok(Json(TaskListResponse {
         tasks: dtos,
+        server_time: Utc::now(),
+    }))
+}
+
+// ----------------------------------------------------------------------
+// GET /api/tasks/{task_number} (T4)
+// ----------------------------------------------------------------------
+
+/// 単一 task の取得。存在しなければ 404。
+///
+/// パスの非数値は axum の `Path<i64>` 抽出器がパース失敗で 400 を返す
+/// (`PATCH` と同じ経路)。
+pub async fn get_task(
+    State(state): State<AppState>,
+    Path(task_number): Path<i64>,
+) -> Result<Json<TaskResponse>, Error> {
+    let (task, reminds) = {
+        let conn = state
+            .conn
+            .lock()
+            .map_err(|_| Error::Config("sqlite mutex poisoned".into()))?;
+        let task = sqlite::read_task_by_id(&conn, task_number)?.ok_or(Error::NotFound)?;
+        let reminds_map = sqlite::read_reminds_for_tasks(&conn, &[task_number])?;
+        let reminds = reminds_map.get(&task_number).cloned().unwrap_or_default();
+        (task, reminds)
+    };
+
+    Ok(Json(TaskResponse {
+        task: TaskDto::from_task(task, reminds),
         server_time: Utc::now(),
     }))
 }

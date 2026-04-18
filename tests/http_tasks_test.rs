@@ -893,3 +893,114 @@ async fn patch_with_all_fields_applies_each_one() {
     assert_eq!(t["updatedAt"], "2026-06-30T00:00:00Z");
     assert_eq!(t["reminds"], json!(["2026-07-15"]));
 }
+
+// ---------- GET /api/tasks/{task_number} (T4) ----------
+
+#[tokio::test]
+async fn get_existing_task_returns_200_with_reminds_and_project() {
+    // t1 は projectName=home, reminds=['2026-04-20'] で seed されている。
+    // 単一取得で Task DTO が完全な形で返ることを確認。
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    let resp = app.oneshot(authed_get("/api/tasks/1")).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let t = &body["task"];
+    assert_eq!(t["taskNumber"], 1);
+    assert_eq!(t["title"], "t1");
+    assert_eq!(t["status"], "open");
+    assert_eq!(t["projectName"], "home");
+    assert_eq!(t["reminds"], json!(["2026-04-20"]));
+    assert!(body["serverTime"].is_string());
+}
+
+#[tokio::test]
+async fn get_task_with_null_project_returns_null() {
+    // t2 は projectName=null, reminds=['2026-04-21']。
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    let body = body_json(app.oneshot(authed_get("/api/tasks/2")).await.unwrap()).await;
+    let t = &body["task"];
+    assert_eq!(t["taskNumber"], 2);
+    assert!(t["projectName"].is_null());
+    assert_eq!(t["reminds"], json!(["2026-04-21"]));
+}
+
+#[tokio::test]
+async fn get_task_with_no_reminds_returns_empty_array() {
+    // t3 は remind 登録なし。
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    let body = body_json(app.oneshot(authed_get("/api/tasks/3")).await.unwrap()).await;
+    assert_eq!(body["task"]["reminds"], json!([]));
+}
+
+#[tokio::test]
+async fn get_nonexistent_task_returns_404() {
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    let resp = app.oneshot(authed_get("/api/tasks/9999")).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let body = body_json(resp).await;
+    assert_eq!(body["error"], "not found");
+}
+
+#[tokio::test]
+async fn get_task_with_non_numeric_path_returns_400() {
+    // axum の Path<i64> 抽出が数値パース失敗で 400 を返すことを pin。
+    let conn = make_my_task_db();
+    let app = app_with(conn);
+
+    let resp = app.oneshot(authed_get("/api/tasks/abc")).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn get_task_without_auth_returns_401() {
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    let req = Request::builder()
+        .uri("/api/tasks/1")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn post_then_get_round_trips() {
+    // クロスエンドポイント regression guard: POST で作成した task_number を
+    // GET /:n で取り出して同一内容が返ることを確認。
+    let conn = make_my_task_db();
+    let app = app_with(conn);
+
+    let created = body_json(
+        app.clone()
+            .oneshot(authed_post("/api/tasks", minimal_create_body()))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let task_number = created["task"]["taskNumber"].as_i64().unwrap();
+
+    let fetched = body_json(
+        app.oneshot(authed_get(&format!("/api/tasks/{task_number}")))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(fetched["task"]["taskNumber"], task_number);
+    assert_eq!(fetched["task"]["title"], "new task");
+    assert_eq!(fetched["task"]["status"], "open");
+}
