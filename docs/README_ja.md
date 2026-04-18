@@ -54,12 +54,12 @@ api_key = "your-api-key-here"
 
 環境変数はファイルの値を上書きする:
 
-| 変数名                    | 上書き対象          |
-|---------------------------|---------------------|
-| `MY_TASK_SYNC_API_KEY`    | `[server].api_key`  |
-| `MY_TASK_SYNC_PORT`       | `[server].port`     |
-| `MY_TASK_DATA_FILE`       | `[sqlite].path`     |
-| `RUST_LOG`                | tracing フィルタ    |
+| 変数名                 | 上書き対象         |
+| ---------------------- | ------------------ |
+| `MY_TASK_SYNC_API_KEY` | `[server].api_key` |
+| `MY_TASK_SYNC_PORT`    | `[server].port`    |
+| `MY_TASK_DATA_FILE`    | `[sqlite].path`    |
+| `RUST_LOG`             | tracing フィルタ   |
 
 `api_key` が解決できない場合、サーバーは起動拒否する (サイレントデフォルト
 なし)。

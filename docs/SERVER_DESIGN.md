@@ -44,9 +44,9 @@ my-task (CLI) ──writes──► SQLite ◄──reads/writes── my-task-s
 
 ## フェーズ分割
 
-| フェーズ | 範囲 | 検証ゴール |
-|---------|------|----------|
-| **Phase 1** | REST サーバー骨格 + `/api/tasks` + `/api/projects` | ローカル my-own と直結し、タスク CRUD が双方向に動くことを手動確認 |
+| フェーズ    | 範囲                                                     | 検証ゴール                                                            |
+| ----------- | -------------------------------------------------------- | --------------------------------------------------------------------- |
+| **Phase 1** | REST サーバー骨格 + `/api/tasks` + `/api/projects`       | ローカル my-own と直結し、タスク CRUD が双方向に動くことを手動確認    |
 | **Phase 2** | ngrok サブプロセス自動起動 + Drop ガード + `/api/status` | Vercel 上の my-own から公開 URL 経由で Phase 1 と同等に動くことを確認 |
 
 Phase 間で PR を分割する。Phase 1 が動かないまま Phase 2 を載せない。
@@ -93,12 +93,14 @@ GET    /api/projects                                → 200 { projects, serverTi
 #### `GET /api/tasks`
 
 クエリパラメータ (すべて任意):
+
 - `status` — `open` / `done` / `closed` のいずれか。未指定なら全 status
 - `since` — `YYYY-MM-DD`。`tasks.updated > since` のみ返す (差分取得用)
 - `project` — プロジェクト名完全一致
 - `limit` — 返す件数上限 (未指定: 全件)
 
 レスポンス:
+
 ```json
 {
   "tasks": [ { "taskNumber": 1, "title": "…", … , "reminds": ["2026-04-20"] } ],
@@ -117,6 +119,7 @@ GET    /api/projects                                → 200 { projects, serverTi
 新規作成。body から `taskNumber` は受け取らない — **SQLite の rowid がサーバー採番される**。
 
 リクエスト body:
+
 ```json
 {
   "title": "…",
@@ -133,6 +136,7 @@ GET    /api/projects                                → 200 { projects, serverTi
 ```
 
 レスポンス (`201 Created`):
+
 ```json
 { "task": { "taskNumber": 42, "title": "…", … }, "serverTime": "…" }
 ```
@@ -153,7 +157,10 @@ body は `POST` と同一スキーマだが全フィールド optional。
 
 ```json
 {
-  "projects": [ { "id": 1, "name": "home" }, { "id": 2, "name": "work" } ],
+  "projects": [
+    { "id": 1, "name": "home" },
+    { "id": 2, "name": "work" }
+  ],
   "serverTime": "…"
 }
 ```
@@ -170,6 +177,7 @@ body は `POST` と同一スキーマだが全フィールド optional。
 ### 廃止するコード
 
 Phase 1 の PR でまとめて削除:
+
 - `src/api_client.rs` (SyncApi トレイト + HttpApiClient)
 - `src/sync_engine.rs` (push / pull_unsynced / pull_updates / sync_cycle)
 - `src/sync_state.rs` (state.db 管理)
@@ -245,11 +253,13 @@ impl Drop for NgrokGuard {
 認証 **不要** (運用確認用; センシティブ情報を返さない)。
 
 実装:
+
 1. `reqwest::get("http://localhost:4040/api/tunnels")` で ngrok admin API を叩く
 2. 最初の tunnel を抽出 (`--domain` で 1 本に固定しているので single tunnel 前提)
 3. 必要なフィールドを抽出して集約 JSON を返す
 
 レスポンス (正常時):
+
 ```json
 {
   "server": {
@@ -278,11 +288,11 @@ impl Drop for NgrokGuard {
 
 ## 未決事項 (後続フェーズで詰める)
 
-| 論点 | 選択肢 | 保留理由 |
-|------|--------|---------|
+| 論点                       | 選択肢                                                                                    | 保留理由                                    |
+| -------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------- |
 | Neon の `tasks` 系テーブル | (a) 廃止 / (b) my-own が read-through キャッシュとして保持 / (c) 書き込みも Neon に二重化 | オフライン時の my-own UI をどう見せるか次第 |
-| my-own のオフライン挙動 | (a) 「daemon unreachable」表示 / (b) Neon キャッシュから読み取り | Neon の扱いと一体 |
-| ngrok 以外のトンネル手段 | cloudflared / tailscale funnel に切り替えるか | 無料枠・ドメイン固定・起動安定性の比較待ち |
-| LaunchAgent の KeepAlive | 現状どおり / 明示 `ThrottleInterval` 設定 | Phase 2 の ngrok 再起動頻度を見てから |
+| my-own のオフライン挙動    | (a) 「daemon unreachable」表示 / (b) Neon キャッシュから読み取り                          | Neon の扱いと一体                           |
+| ngrok 以外のトンネル手段   | cloudflared / tailscale funnel に切り替えるか                                             | 無料枠・ドメイン固定・起動安定性の比較待ち  |
+| LaunchAgent の KeepAlive   | 現状どおり / 明示 `ThrottleInterval` 設定                                                 | Phase 2 の ngrok 再起動頻度を見てから       |
 
 これらは Phase 1/2 の完了後に別 issue で議論する。

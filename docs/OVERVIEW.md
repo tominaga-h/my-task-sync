@@ -57,43 +57,43 @@ my-task (CLI)   ──writes──► SQLite ◄──reads/writes── my-task
 
 ## フェーズ状況
 
-| Phase | スコープ | 状態 |
-|-------|---------|------|
+| Phase | スコープ                                                       | 状態                     |
+| ----- | -------------------------------------------------------------- | ------------------------ |
 | **1** | REST サーバー骨格 + 認証 + `/api/tasks` CRUD + `/api/projects` | 進行中 (T6 / T7 / T8 残) |
-| **2** | ngrok サブプロセス自動起動 + `/api/status` | 未着手 |
+| **2** | ngrok サブプロセス自動起動 + `/api/status`                     | 未着手                   |
 
 詳細タスク分解は [`../tasks/plan.md`](../tasks/plan.md)、進捗チェックリストは
 [`../tasks/todo.md`](../tasks/todo.md)。
 
 ## ドキュメント案内
 
-| 目的 | 参照先 |
-|------|-------|
-| v2 設計仕様 (motivation / アーキテクチャ / Phase 構成) | [`SERVER_DESIGN.md`](SERVER_DESIGN.md) |
-| HTTP API リファレンス (エンドポイント・パラメータ・例) | [`API.md`](API.md) |
-| インストール / 起動 / 設定 (英語) | [`../README.md`](../README.md) |
-| インストール / 起動 / 設定 (日本語) | [`README_ja.md`](README_ja.md) |
-| 実装プラン (垂直スライス / チェックポイント / リスク) | [`../tasks/plan.md`](../tasks/plan.md) |
-| 実装 TODO (チェックボックス) | [`../tasks/todo.md`](../tasks/todo.md) |
-| Claude Code 向け運用ガイド (不変量・コマンド・編集ガイド) | [`../CLAUDE.md`](../CLAUDE.md) |
+| 目的                                                      | 参照先                                 |
+| --------------------------------------------------------- | -------------------------------------- |
+| v2 設計仕様 (motivation / アーキテクチャ / Phase 構成)    | [`SERVER_DESIGN.md`](SERVER_DESIGN.md) |
+| HTTP API リファレンス (エンドポイント・パラメータ・例)    | [`API.md`](API.md)                     |
+| インストール / 起動 / 設定 (英語)                         | [`../README.md`](../README.md)         |
+| インストール / 起動 / 設定 (日本語)                       | [`README_ja.md`](README_ja.md)         |
+| 実装プラン (垂直スライス / チェックポイント / リスク)     | [`../tasks/plan.md`](../tasks/plan.md) |
+| 実装 TODO (チェックボックス)                              | [`../tasks/todo.md`](../tasks/todo.md) |
+| Claude Code 向け運用ガイド (不変量・コマンド・編集ガイド) | [`../CLAUDE.md`](../CLAUDE.md)         |
 
 ## 設計決定事項 (抜粋)
 
 詳細は [`SERVER_DESIGN.md`](SERVER_DESIGN.md) と [`../CLAUDE.md`](../CLAUDE.md)。
 
-| 項目 | 決定 |
-|------|------|
-| 言語 | **Rust** (my-task と rusqlite コード共有、単一バイナリ配布) |
-| HTTP フレームワーク | **axum 0.8** + tower / tower-http |
-| 実行形態 | macOS **launchctl LaunchAgent** 常駐 |
-| 通信方向 | my-own が my-task-sync を呼ぶ **REST** (v1 の polling は廃止) |
-| 認証 | 静的 **Bearer token** (`[server].api_key` or `MY_TASK_SYNC_API_KEY`) |
-| bind | **loopback (`127.0.0.1`) のみ** — 公開は Phase 2 の ngrok 経由 |
-| `task_number` 採番 | **SQLite rowid が唯一の採番元**。サーバーが POST 時に付与、body 側は禁止 (400) |
-| 日付精度 | **日単位** (`NaiveDate` / `YYYY-MM-DD`) — my-task スキーマ継承 |
-| `since` の比較 | RFC 3339 datetime を UTC 日付に truncate → `updated >= date(since)` (inclusive) |
-| config 場所 | `$HOME/.config/my-task-sync/config.toml` (macOS でも `Library/Application Support` は使わない) |
-| テスト DB | `tests/common/mod.rs::make_my_task_db` の in-memory モック。実 `tasks.db` は絶対に触らない |
+| 項目                | 決定                                                                                           |
+| ------------------- | ---------------------------------------------------------------------------------------------- |
+| 言語                | **Rust** (my-task と rusqlite コード共有、単一バイナリ配布)                                    |
+| HTTP フレームワーク | **axum 0.8** + tower / tower-http                                                              |
+| 実行形態            | macOS **launchctl LaunchAgent** 常駐                                                           |
+| 通信方向            | my-own が my-task-sync を呼ぶ **REST** (v1 の polling は廃止)                                  |
+| 認証                | 静的 **Bearer token** (`[server].api_key` or `MY_TASK_SYNC_API_KEY`)                           |
+| bind                | **loopback (`127.0.0.1`) のみ** — 公開は Phase 2 の ngrok 経由                                 |
+| `task_number` 採番  | **SQLite rowid が唯一の採番元**。サーバーが POST 時に付与、body 側は禁止 (400)                 |
+| 日付精度            | **日単位** (`NaiveDate` / `YYYY-MM-DD`) — my-task スキーマ継承                                 |
+| `since` の比較      | RFC 3339 datetime を UTC 日付に truncate → `updated >= date(since)` (inclusive)                |
+| config 場所         | `$HOME/.config/my-task-sync/config.toml` (macOS でも `Library/Application Support` は使わない) |
+| テスト DB           | `tests/common/mod.rs::make_my_task_db` の in-memory モック。実 `tasks.db` は絶対に触らない     |
 
 ## 廃止された v1 概念
 

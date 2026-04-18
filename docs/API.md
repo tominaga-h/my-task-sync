@@ -2,15 +2,15 @@
 
 > Phase 1 進行中。エンドポイントは段階的に追加される:
 >
-> | エンドポイント | タスク | 状態 |
-> |---|---|---|
-> | `GET /healthz`                  | T1 | ✅ 実装済み |
-> | `GET /api/tasks`                | T3 | ✅ 実装済み |
-> | `POST /api/tasks`               | T5 | ✅ 実装済み |
-> | `GET /api/tasks/:task_number`   | T4 | ⏳ 未実装 |
-> | `PATCH /api/tasks/:task_number` | T6 | ⏳ 未実装 |
-> | `GET /api/projects`             | T7 | ⏳ 未実装 |
-> | `GET /api/status`               | T11 (Phase 2) | ⏳ 未実装 |
+> | エンドポイント                  | タスク        | 状態        |
+> | ------------------------------- | ------------- | ----------- |
+> | `GET /healthz`                  | T1            | ✅ 実装済み |
+> | `GET /api/tasks`                | T3            | ✅ 実装済み |
+> | `POST /api/tasks`               | T5            | ✅ 実装済み |
+> | `GET /api/tasks/:task_number`   | T4            | ⏳ 未実装   |
+> | `PATCH /api/tasks/:task_number` | T6            | ⏳ 未実装   |
+> | `GET /api/projects`             | T7            | ⏳ 未実装   |
+> | `GET /api/status`               | T11 (Phase 2) | ⏳ 未実装   |
 >
 > エンドポイントの追加・変更時はこのドキュメントも同時に更新すること。
 
@@ -35,15 +35,15 @@
 非 2xx のレスポンスは全て以下の形式の JSON を返す:
 
 ```json
-{"error": "human-readable message"}
+{ "error": "human-readable message" }
 ```
 
-| ステータス | 意味 |
-|-------:|---------|
-| `400 Bad Request`          | 不正な入力 (`status` が許容値外 / `since` が RFC 3339 でない / body に `taskNumber` がある / 未知のフィールドがある / `YYYY-MM-DD` 単独の `since` など) |
-| `401 Unauthorized`         | Bearer トークン欠落 / 形式不正 / 不一致 |
-| `404 Not Found`            | ルートが存在しない (または `GET /:n` 等でリソースが見つからない) |
-| `500 Internal Server Error`| サーバー側の障害。詳細は `tracing::error!` にログされるが、レスポンスには含まない |
+|                  ステータス | 意味                                                                                                                                                    |
+| --------------------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|           `400 Bad Request` | 不正な入力 (`status` が許容値外 / `since` が RFC 3339 でない / body に `taskNumber` がある / 未知のフィールドがある / `YYYY-MM-DD` 単独の `since` など) |
+|          `401 Unauthorized` | Bearer トークン欠落 / 形式不正 / 不一致                                                                                                                 |
+|             `404 Not Found` | ルートが存在しない (または `GET /:n` 等でリソースが見つからない)                                                                                        |
+| `500 Internal Server Error` | サーバー側の障害。詳細は `tracing::error!` にログされるが、レスポンスには含まない                                                                       |
 
 ---
 
@@ -64,12 +64,12 @@ curl localhost:3333/healthz
 
 ### クエリパラメータ (全て optional)
 
-| パラメータ | 型              | 備考 |
-|-----------|-------------------|------|
-| `status`  | `open` / `done` / `closed` | 完全一致。上記以外は `400` |
-| `since`   | RFC 3339 datetime | `updated >= date(since)` のタスクを返す。UTC 日付に truncate される (ストレージは日単位精度)。非 RFC 3339 (例: `YYYY-MM-DD` 単独) は `400` |
-| `project` | string            | プロジェクト名の完全一致 |
-| `limit`   | `u32`             | デフォルト **500** (レスポンス爆発を防ぐサーバー側の安全弁)。それ以上必要なら明示的に指定する。`limit=0` は空配列を返す |
+| パラメータ | 型                         | 備考                                                                                                                                       |
+| ---------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `status`   | `open` / `done` / `closed` | 完全一致。上記以外は `400`                                                                                                                 |
+| `since`    | RFC 3339 datetime          | `updated >= date(since)` のタスクを返す。UTC 日付に truncate される (ストレージは日単位精度)。非 RFC 3339 (例: `YYYY-MM-DD` 単独) は `400` |
+| `project`  | string                     | プロジェクト名の完全一致                                                                                                                   |
+| `limit`    | `u32`                      | デフォルト **500** (レスポンス爆発を防ぐサーバー側の安全弁)。それ以上必要なら明示的に指定する。`limit=0` は空配列を返す                    |
 
 ### レスポンス 200
 
@@ -122,6 +122,7 @@ curl -H "Authorization: Bearer $KEY" "localhost:3333/api/tasks?project=home"
 Content-Type: `application/json`。
 
 **必須**:
+
 - `title` (string)
 - `status` (`open` / `done` / `closed`)
 - `source` (string — 通常は `cli` / `web`)
@@ -129,6 +130,7 @@ Content-Type: `application/json`。
 - `updatedAt` (RFC 3339 datetime)
 
 **任意**:
+
 - `projectName` (string or `null`) — 未登録の名前を指定すると `projects` に
   透過的に INSERT される
 - `due` (`YYYY-MM-DD` or `null`)
@@ -137,6 +139,7 @@ Content-Type: `application/json`。
 - `reminds` (`YYYY-MM-DD` の配列, デフォルト `[]`)
 
 **禁止**:
+
 - `taskNumber` (サーバー採番のため含めると `400`)
 - 未知のフィールド (`deny_unknown_fields` により `reminders` のような
   typo を `400` で検出)
