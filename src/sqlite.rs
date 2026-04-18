@@ -51,6 +51,25 @@ pub fn resolve_project(conn: &Connection, name: &str) -> Result<i64, Error> {
     Ok(id)
 }
 
+/// Read every project row, ordered by `id` (= 挿入順)。
+///
+/// `GET /api/projects` (T7) が叩くだけの薄いヘルパ。件数は my-task の
+/// 運用規模 (単一ユーザー) を前提に全件返す。ページング無し。
+pub fn read_projects(conn: &Connection) -> Result<Vec<crate::model::Project>, Error> {
+    let mut stmt = conn.prepare("SELECT id, name FROM projects ORDER BY id")?;
+    let rows = stmt.query_map([], |row| {
+        Ok(crate::model::Project {
+            id: row.get(0)?,
+            name: row.get(1)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
 // ------------------------------------------------------------------
 // tasks: insert / update
 // ------------------------------------------------------------------

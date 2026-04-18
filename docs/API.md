@@ -8,8 +8,8 @@
 > | `GET /api/tasks`                | T3            | ✅ 実装済み |
 > | `POST /api/tasks`               | T5            | ✅ 実装済み |
 > | `PATCH /api/tasks/:task_number` | T6            | ✅ 実装済み |
+> | `GET /api/projects`             | T7            | ✅ 実装済み |
 > | `GET /api/tasks/:task_number`   | T4            | ⏳ 未実装   |
-> | `GET /api/projects`             | T7            | ⏳ 未実装   |
 > | `GET /api/status`               | T11 (Phase 2) | ⏳ 未実装   |
 >
 > エンドポイントの追加・変更時はこのドキュメントも同時に更新すること。
@@ -267,4 +267,43 @@ curl -X PATCH \
   -H "content-type: application/json" \
   -d '{"reminds":["2026-06-01","2026-06-10"]}' \
   localhost:3333/api/tasks/42
+```
+
+---
+
+## GET /api/projects
+
+プロジェクト一覧を取得する。件数制限 / ページングなし (単一ユーザー運用前提)。
+
+### クエリパラメータ
+
+なし。
+
+### レスポンス 200
+
+```json
+{
+  "projects": [
+    { "id": 1, "name": "home" },
+    { "id": 2, "name": "work" },
+    { "id": 3, "name": "hobby" }
+  ],
+  "serverTime": "2026-04-18T14:36:11Z"
+}
+```
+
+順序は `id ASC` (= 挿入順)。`id` は `projects.id` (`task.projectName` から JOIN
+で引ける)。
+
+### プロジェクト作成について
+
+**新規作成エンドポイントは存在しない**。プロジェクトは `POST /api/tasks` / `PATCH /api/tasks/:n`
+で `projectName` に未登録の名前を指定すると、サーバー側で透過的に `INSERT OR IGNORE`
+される (= `sqlite::resolve_project` が担う)。したがってクライアントは
+「プロジェクト作成」を意識する必要がない。
+
+### 例
+
+```bash
+curl -H "Authorization: Bearer $KEY" localhost:3333/api/projects
 ```

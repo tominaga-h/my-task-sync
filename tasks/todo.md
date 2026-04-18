@@ -82,12 +82,17 @@
 
 ## T7. GET /api/projects
 
-- [ ] `src/sqlite.rs` に `read_projects`
-- [ ] `src/model.rs` に `Project` / `ProjectListResponse`
-- [ ] `src/http/projects.rs` (新規) に `list_projects` ハンドラ + ルート登録
-- [ ] 単体テスト: 空 / n 件 / 順序 id ASC
+- [x] `src/sqlite.rs` に `read_projects(conn) -> Vec<Project>` (`ORDER BY id` で挿入順)
+- [x] `src/model.rs` に `Project { id, name }` / `ProjectListResponse { projects, serverTime }`
+- [x] `src/http/projects.rs` (新規) に `list_projects` ハンドラ
+- [x] `src/http/mod.rs` に `pub mod projects;` + `/projects` ルート登録
+- [x] `tests/http_projects_test.rs` (新規) 4 件: 空 → 空配列 / 3 件で順序 id ASC / POST 透過作成したプロジェクトが見える / 認証なし → 401
+- [x] `tests/common/mod.rs` に `#![allow(dead_code)]` 追加 (integration test crate ごとに common が再コンパイルされ、未使用ヘルパに警告が出るため)
+- [x] `docs/API.md` に GET /api/projects セクション + 実装ステータス表更新
+- [x] `make check` 全緑 — 合計 85 件
+- [x] 実バイナリ smoke test (mock tasks.db): 3 ケース期待どおり (3 件 seed / 認証なし 401 / POST 透過作成 → projects に反映)
 
-→ **CP4 レビュー (全 5 エンドポイントの handler 単体テスト緑)**
+→ **CP4 到達 (全 5 エンドポイントの handler 単体テスト緑)**。T4 (GET /:n) 残で Phase 1 code 完了。
 
 ## T8. ローカル my-own 結合テスト
 

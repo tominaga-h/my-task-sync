@@ -16,6 +16,7 @@ use rusqlite::Connection;
 use tower_http::trace::TraceLayer;
 
 pub mod auth;
+pub mod projects;
 pub mod tasks;
 
 /// Shared state handed to every handler via `axum::extract::State`.
@@ -50,7 +51,8 @@ pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/tasks", get(tasks::list_tasks).post(tasks::create_task))
         .route("/tasks/{task_number}", patch(tasks::patch_task))
-        // T4 (GET /:n) / T7 (GET /api/projects) は順次追加。
+        .route("/projects", get(projects::list_projects))
+        // T4 (GET /:n) は後続。
         .fallback(api_not_found)
         .layer(middleware::from_fn_with_state(
             state.clone(),

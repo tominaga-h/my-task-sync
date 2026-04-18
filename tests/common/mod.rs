@@ -5,6 +5,12 @@
 //! テスト側でスキーマを用意する必要がある。
 //!
 //! スキーマは `~/lab/rust/my-task/src/db.rs` L14〜38 と完全一致させる。
+//!
+//! `#[allow(dead_code)]`: 各 integration test file は別 crate としてビルド
+//! されるため、使わないテストからは "unused" 警告が出る。共通ヘルパ側で
+//! 抑制する (個別ファイルで `#[allow]` を重ねるより一括処理)。
+
+#![allow(dead_code)]
 
 use rusqlite::Connection;
 

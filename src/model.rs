@@ -144,6 +144,22 @@ pub struct TaskResponse {
     pub server_time: DateTime<Utc>,
 }
 
+/// `GET /api/projects` 要素。`id` / `name` のどちらも単語 1 つなので
+/// camelCase rename は不要 (出ても同一形)。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Project {
+    pub id: i64,
+    pub name: String,
+}
+
+/// `GET /api/projects` のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectListResponse {
+    pub projects: Vec<Project>,
+    pub server_time: DateTime<Utc>,
+}
+
 fn date_to_dt(d: NaiveDate) -> DateTime<Utc> {
     d.and_hms_opt(0, 0, 0)
         .expect("00:00:00 is a valid wall time")
