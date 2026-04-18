@@ -23,10 +23,12 @@
 
 ## T2. Bearer 認証 middleware
 
-- [ ] `src/error.rs` に `Error::Unauthorized` + `IntoResponse` 実装
-- [ ] `src/http/auth.rs` (新規) に `require_bearer` middleware
-- [ ] `src/http/mod.rs` で `/api/*` ネストに middleware 適用 (`/healthz` は非適用)
-- [ ] 単体テスト: ヘッダ欠損 / key 不一致 / 正しい key / `/healthz` 通過 の 4 パターン
+- [x] `src/error.rs` に `Error::Unauthorized` + `IntoResponse` 実装 (5xx は詳細を server ログのみ、4xx はクライアントに簡潔メッセージ)
+- [x] `src/http/auth.rs` (新規) に `require_bearer` middleware + 定数時間比較
+- [x] `src/http/mod.rs` で `/api/*` ネストに middleware 適用。`.fallback(api_not_found)` で空ルート時も middleware が発火するよう修正
+- [x] `AppState` に `api_key: Arc<String>` 追加、`main.rs` で `cfg.server.api_key` を渡す
+- [x] 単体テスト: ヘッダ欠損 / 形式不正 (no Bearer prefix) / key 不一致 / 正しい key 404 fall-through / `/healthz` は認証なしで通過 — 5 パターン + `constant_time_eq` 4 パターン
+- [x] 実バイナリ smoke test: `/healthz=200 / /api/foo (no auth)=401 / wrong=401 / malformed=401 / correct=404`
 
 → **CP2 レビュー**
 

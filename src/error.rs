@@ -1,10 +1,16 @@
 //! Crate-wide error type.
 //!
-//! `OVERVIEW.md` § 依存クレート does not include `thiserror`, so the enum
-//! is hand-written with `Display` / `std::error::Error` / `From` impls
-//! for the underlying errors we propagate.
+//! 既存設計 (`OVERVIEW.md` § 依存クレート) に従い `thiserror` を使わず、
+//! `Display` / `std::error::Error` / `From` を手書きしている。HTTP レスポンス
+//! への変換 (`axum::response::IntoResponse`) もここに実装する — ハンドラが
+//! `Result<T, Error>` を返せば自動で適切な status + JSON body にマップされる。
 
 use std::fmt;
+
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::Json;
+use serde_json::json;
 
 #[derive(Debug)]
 pub enum Error {
@@ -22,6 +28,8 @@ pub enum Error {
     Json(serde_json::Error),
     /// Remote API returned a non-2xx response.
     Api { status: u16, body: String },
+    /// Bearer 認証に失敗 (ヘッダ欠損 / 形式不正 / トークン不一致)。
+    Unauthorized,
 }
 
 impl fmt::Display for Error {
@@ -34,6 +42,7 @@ impl fmt::Display for Error {
             Error::Toml(e) => write!(f, "toml error: {e}"),
             Error::Json(e) => write!(f, "json error: {e}"),
             Error::Api { status, body } => write!(f, "api error {status}: {body}"),
+            Error::Unauthorized => write!(f, "unauthorized"),
         }
     }
 }
@@ -46,8 +55,24 @@ impl std::error::Error for Error {
             Error::Io(e) => Some(e),
             Error::Toml(e) => Some(e),
             Error::Json(e) => Some(e),
-            Error::Config(_) | Error::Api { .. } => None,
+            Error::Config(_) | Error::Api { .. } | Error::Unauthorized => None,
         }
+    }
+}
+
+/// `Error` を HTTP レスポンスに落とす変換。4xx 系はクライアント向けに
+/// 簡潔なメッセージを返し、5xx 系は詳細を server ログにだけ残して
+/// クライアントには "internal error" だけ伝える (情報漏洩を避ける)。
+impl IntoResponse for Error {
+    fn into_response(self) -> Response {
+        let (status, message) = match &self {
+            Error::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
+            _ => {
+                tracing::error!(error = %self, "server error");
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+            }
+        };
+        (status, Json(json!({ "error": message }))).into_response()
     }
 }
 

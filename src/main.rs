@@ -97,7 +97,7 @@ async fn run(cfg: ResolvedConfig) -> Result<(), Error> {
     );
 
     let conn = sqlite::open(&cfg.sqlite.path)?;
-    let state = http::AppState::new(conn);
+    let state = http::AppState::new(conn, cfg.server.api_key.clone());
     let router = http::router(state);
 
     // Loopback のみ bind: Phase 2 の ngrok が localhost:port を公開 URL に
