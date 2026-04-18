@@ -71,6 +71,7 @@ my-task (CLI)   ──writes──► SQLite ◄──reads/writes── my-task
 | --------------------------------------------------------- | -------------------------------------- |
 | v2 設計仕様 (motivation / アーキテクチャ / Phase 構成)    | [`SERVER_DESIGN.md`](SERVER_DESIGN.md) |
 | HTTP API リファレンス (エンドポイント・パラメータ・例)    | [`API.md`](API.md)                     |
+| my-own 側の統合実装ガイド (TS 型 / クライアント / 書き換え) | [`MY_OWN_INTEGRATION.md`](MY_OWN_INTEGRATION.md) |
 | インストール / 起動 / 設定 (英語)                         | [`../README.md`](../README.md)         |
 | インストール / 起動 / 設定 (日本語)                       | [`README_ja.md`](README_ja.md)         |
 | 実装プラン (垂直スライス / チェックポイント / リスク)     | [`../tasks/plan.md`](../tasks/plan.md) |
