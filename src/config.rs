@@ -161,8 +161,14 @@ fn load_file_config(explicit: Option<&Path>) -> Result<FileConfig, Error> {
     Ok(FileConfig::default())
 }
 
-fn default_config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|p| p.join("my-task-sync").join("config.toml"))
+/// `$HOME/.config/my-task-sync/config.toml` を返す (unix 系のみ)。
+///
+/// `dirs::config_dir()` は macOS で `~/Library/Application Support/` を
+/// 返してしまい、README / `docs/SERVER_DESIGN.md` / my-task 本体の
+/// ドキュメント (全て `~/.config/` 前提) と食い違うため、`home_dir()` +
+/// `.config` を自前で組み立てる。
+pub fn default_config_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|p| p.join(".config").join("my-task-sync").join("config.toml"))
 }
 
 fn resolve_sqlite_path(file_path: Option<&str>) -> Result<PathBuf, Error> {

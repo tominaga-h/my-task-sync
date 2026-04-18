@@ -261,6 +261,27 @@ fn missing_config_file_returns_config_error() {
 
 // ---------- CLI 引数パース ----------
 
+// ---------- デフォルト config パス ----------
+
+#[test]
+fn default_config_path_is_under_dot_config() {
+    // Given/When
+    let path = config::default_config_path().expect("home_dir must resolve on unix");
+
+    // Then: macOS で dirs::config_dir() が返す "Library/Application Support"
+    // 配下ではなく、README / OVERVIEW / my-task 側のドキュメントに合わせて
+    // `$HOME/.config/my-task-sync/config.toml` に解決されていること。
+    let s = path.to_string_lossy();
+    assert!(
+        s.ends_with(".config/my-task-sync/config.toml"),
+        "expected path under ~/.config/my-task-sync/, got: {s}"
+    );
+    assert!(
+        !s.contains("Library/Application Support"),
+        "must not resolve under macOS Library path, got: {s}"
+    );
+}
+
 #[test]
 fn parse_cli_args_captures_config_path() {
     // Given

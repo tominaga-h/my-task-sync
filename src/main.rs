@@ -32,7 +32,7 @@ USAGE:
 
 OPTIONS:
     --config <path>   Path to TOML config file
-                      (default: $XDG_CONFIG_HOME/my-task-sync/config.toml)
+                      (default: $HOME/.config/my-task-sync/config.toml)
     --help, -h        Show this help and exit
 
 ENVIRONMENT:
@@ -81,8 +81,8 @@ async fn main() -> ExitCode {
 }
 
 fn init_tracing() {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("my_task_sync=info"));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("my_task_sync=info"));
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(false)
