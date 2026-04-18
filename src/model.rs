@@ -113,11 +113,14 @@ pub struct TaskListResponse {
 
 /// `POST /api/tasks` body / `PATCH /api/tasks/:n` body (後者は T6)。
 /// `taskNumber` は含めない — サーバーが SQLite rowid を採番する約束。
-/// body に `taskNumber` が含まれていたら 400 (ハンドラ側で検出)。
+/// body に `taskNumber` が含まれていたら 400 (ハンドラ側で早期検出)。
 ///
 /// `important` / `reminds` は省略可 (デフォルト false / 空配列)。
+/// 未定義フィールドは `deny_unknown_fields` でパースエラー (→ 400) に
+/// する。クライアントのタイポ (例: `reminders`) がサイレントに
+/// 捨てられて空データで INSERT されるのを防ぐため。
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskCreateDto {
     pub title: String,
     pub status: String,

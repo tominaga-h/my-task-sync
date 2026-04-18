@@ -496,6 +496,66 @@ async fn post_missing_required_title_returns_400() {
 }
 
 #[tokio::test]
+async fn post_with_all_optional_fields_round_trips() {
+    // S12: minimal_create_body だと important=false / due=null / doneAt=null
+    // の経路しか通らない。全 optional を埋めた body で書き込み→レスポンス
+    // 復元が正しく回ることを 1 テストで pin する。
+    let conn = make_my_task_db();
+    let app = app_with(conn);
+
+    let body = json!({
+        "title": "full task",
+        "status": "done",
+        "source": "cli",
+        "projectName": "work",
+        "due": "2026-05-01",
+        "doneAt": "2026-04-18",
+        "important": true,
+        "updatedAt": "2026-04-18T10:00:00Z",
+        "createdAt": "2026-04-15T00:00:00Z",
+        "reminds": ["2026-04-20", "2026-04-25"]
+    });
+
+    let resp = app.oneshot(authed_post("/api/tasks", body)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let body = body_json(resp).await;
+    let t = &body["task"];
+    assert_eq!(t["title"], "full task");
+    assert_eq!(t["status"], "done");
+    assert_eq!(t["source"], "cli");
+    assert_eq!(t["projectName"], "work");
+    assert_eq!(t["due"], "2026-05-01");
+    assert_eq!(t["doneAt"], "2026-04-18");
+    assert_eq!(t["important"], true);
+    assert_eq!(t["updatedAt"], "2026-04-18T00:00:00Z"); // 日単位 truncate
+    assert_eq!(t["createdAt"], "2026-04-15T00:00:00Z");
+    assert_eq!(t["reminds"], json!(["2026-04-20", "2026-04-25"]));
+}
+
+#[tokio::test]
+async fn post_with_unknown_field_returns_400() {
+    // S11: deny_unknown_fields で クライアント typo を捕まえる。
+    // 例: `reminders` (s 余分) を silently 捨てずに 400 にする。
+    let conn = make_my_task_db();
+    let app = app_with(conn);
+
+    let mut body = minimal_create_body();
+    body["reminders"] = json!(["2026-04-20"]); // typo: should be "reminds"
+
+    let resp = app.oneshot(authed_post("/api/tasks", body)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let err = body_json(resp).await;
+    // serde のエラーメッセージに未知フィールド名が含まれるので、
+    // クライアントが何を間違えたかすぐ分かる。
+    assert!(
+        err["error"].as_str().unwrap().contains("reminders"),
+        "error should name the unknown field, got: {}",
+        err["error"]
+    );
+}
+
+#[tokio::test]
 async fn post_without_auth_returns_401() {
     let conn = make_my_task_db();
     let app = app_with(conn);

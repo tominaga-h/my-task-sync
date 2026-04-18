@@ -1,47 +1,64 @@
 # my-task-sync
 
-macOS local daemon that keeps **my-task** (local SQLite CLI) and **my-own**
-(Neon-backed Web app) in sync. Polls every 30 seconds (configurable),
-runs under `launchctl`, and uses the SQLite rowid as the canonical
-`task_number`.
+macOS local HTTP server that exposes the **my-task** SQLite over REST so that
+**my-own** (the Next.js Web app) can read and write tasks against it. Runs
+under `launchctl` on a loopback port (default `:3333`) with Bearer token
+authentication.
 
-Designed for a single user, single machine; not a general multi-tenant
-sync service.
+Designed for a single user on a single machine — not a multi-tenant service.
+
+- Design spec: [`docs/SERVER_DESIGN.md`](docs/SERVER_DESIGN.md)
+- HTTP API reference: [`docs/API.md`](docs/API.md)
+- Migration plan & progress: [`tasks/plan.md`](tasks/plan.md), [`tasks/todo.md`](tasks/todo.md)
+
+> **Phase 1** — loopback-only access from my-own running locally. Phase 2 will
+> add an ngrok subprocess so the server is reachable from Vercel-hosted my-own
+> via a stable public URL.
 
 ## Requirements
 
 - macOS (uses `launchctl` LaunchAgents)
 - Rust 1.75+ (uses native `async fn` in trait)
-- A running my-task install (provides the SQLite schema this daemon reads)
-- An API key for the my-own `/api/sync/tasks/*` endpoints
+- A running [`my-task`](https://github.com/mad-tmng/my-task) install (provides
+  the SQLite schema this server reads/writes)
+- An API key — a shared secret between my-task-sync and whoever calls it
 
 ## Build
 
 ```bash
-cargo build --release
+cargo build --release           # release binary → target/release/my-task-sync
+make check                      # fmt + check + clippy + test (pre-push gate)
 ```
-
-The release binary lands at `target/release/my-task-sync`.
 
 ## Configure
 
 ```bash
 mkdir -p ~/.config/my-task-sync
 cp config.example.toml ~/.config/my-task-sync/config.toml
-$EDITOR ~/.config/my-task-sync/config.toml      # set api_key
+$EDITOR ~/.config/my-task-sync/config.toml     # set api_key
 ```
 
-Settings can be overridden via environment variables:
+`config.toml` shape:
+
+```toml
+[sqlite]
+# path = "/custom/path/tasks.db"    # default: ~/Library/Application Support/my-task/tasks.db
+
+[server]
+port    = 3333
+api_key = "your-api-key-here"
+```
+
+Environment variables override file values:
 
 | Variable                  | Overrides           |
 |---------------------------|---------------------|
-| `MY_TASK_SYNC_API_KEY`    | `[api].api_key`     |
-| `MY_TASK_SYNC_BASE_URL`   | `[api].base_url`    |
+| `MY_TASK_SYNC_API_KEY`    | `[server].api_key`  |
+| `MY_TASK_SYNC_PORT`       | `[server].port`     |
 | `MY_TASK_DATA_FILE`       | `[sqlite].path`     |
 | `RUST_LOG`                | tracing filter      |
 
-The daemon refuses to start if `api_key` or `base_url` cannot be resolved
-(no silent defaults).
+The server refuses to start if `api_key` is not resolved (no silent defaults).
 
 ## Install as a LaunchAgent
 
@@ -63,35 +80,37 @@ launchctl unload ~/Library/LaunchAgents/com.my-task-sync.plist
 # Logs
 tail -f /tmp/my-task-sync.out.log
 tail -f /tmp/my-task-sync.err.log
-
-# Run a single cycle manually
-my-task-sync --once
-
-# Inspect what would be sent without touching the API or state
-my-task-sync --once --dry-run
 ```
 
-## What it does each cycle
+Graceful shutdown waits up to 10 s for in-flight HTTP requests before
+force-exiting, so `launchctl unload` / restart cycles don't stall.
 
-1. **Push** — read SQLite tasks updated after `last_push_at`, send them
-   to `POST /api/sync/tasks/push`.
-2. **Pull unsynced** — fetch Neon tasks with `task_number IS NULL`,
-   INSERT each into SQLite, then PATCH the assigned rowid back to Neon
-   via `/api/sync/tasks/:id/number`.
-3. **Pull updates** — fetch Neon tasks changed after `last_pull_at`
-   from `/api/sync/tasks/changes`, applying row-level Last-Write-Wins
-   based on the `updated` date. `task_reminds` are replaced wholesale on
-   any update.
+## Quick API check
 
-State (`last_push_at`, `last_pull_at`) lives in
-`~/.config/my-task-sync/state.db` — separate from `tasks.db` so resetting
-the daemon never risks the user's task data.
+```bash
+# Liveness (no auth)
+curl localhost:3333/healthz
+# → 200 OK, body "ok"
+
+# List tasks (auth required)
+curl -H "Authorization: Bearer $MY_TASK_SYNC_API_KEY" localhost:3333/api/tasks
+
+# Create a task
+curl -X POST \
+  -H "Authorization: Bearer $MY_TASK_SYNC_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"title":"buy milk","status":"open","source":"web","createdAt":"2026-04-18T10:00:00Z","updatedAt":"2026-04-18T10:00:00Z"}' \
+  localhost:3333/api/tasks
+```
+
+Full endpoint reference with request/response shapes and error codes is in
+[`docs/API.md`](docs/API.md).
 
 ## Known limitations
 
-- `updated` precision is one day (matches `my-task`'s `NaiveDate` schema).
-  If both sides update the same task on the same day the LWW outcome is
-  whichever side runs the later push, which is usually fine for a single
-  human user but is documented in `docs/OVERVIEW.md`.
-- HTTP retries are limited to 3 retries with `1s → 2s → 4s` backoff;
-  4xx responses are surfaced immediately.
+- `updated` is day-precision (inherited from `my-task`'s `NaiveDate` schema).
+  The `?since=<RFC 3339 datetime>` filter is truncated to UTC date and compared
+  inclusive (`>=`), so same-day updates may appear in multiple incremental
+  fetches — clients should dedup by `taskNumber`.
+- The server binds to `127.0.0.1` only. Phase 2's ngrok subprocess provides
+  public access.
