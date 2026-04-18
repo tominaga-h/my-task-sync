@@ -132,8 +132,10 @@ pub async fn create_task(
         )));
     }
 
-    // INSERT + reminds を 1 トランザクションにまとめる。reminds の途中で
-    // 失敗したら task 本体も rollback されるので、DB に中間状態が残らない。
+    // INSERT + reminds + read-back を 1 トランザクションにまとめる。reminds
+    // の途中で失敗したら task 本体も rollback される。読み戻しも tx 内で行う
+    // ことで、commit 後に別プロセス (my-task CLI) が書き換えた状態を返す余地
+    // を消し、read-after-write 一貫性を保証する。
     let (task, reminds) = {
         let conn = state
             .conn
@@ -153,14 +155,15 @@ pub async fn create_task(
         };
         let id = sqlite::insert_task_row(&tx, &row, None)?;
         sqlite::replace_reminds(&tx, id, &dto.reminds)?;
-        tx.commit()?;
 
-        // 書き戻し直後の行を読み直して返す (project 透過作成や status の
-        // 正規化が反映された状態でクライアントに渡すため)。
-        let task = sqlite::read_task_by_id(&conn, id)?
+        // tx 内で読み戻し (project 透過作成や status の正規化が反映された
+        // 状態でクライアントに渡すため + read-after-write 保証)。
+        let task = sqlite::read_task_by_id(&tx, id)?
             .ok_or_else(|| Error::Config("just-inserted task disappeared from SQLite".into()))?;
-        let reminds_map = sqlite::read_reminds_for_tasks(&conn, &[id])?;
+        let reminds_map = sqlite::read_reminds_for_tasks(&tx, &[id])?;
         let reminds = reminds_map.get(&id).cloned().unwrap_or_default();
+
+        tx.commit()?;
         (task, reminds)
     };
 
@@ -279,12 +282,14 @@ pub async fn patch_task(
             sqlite::replace_reminds(&tx, task_number, &new_reminds)?;
         }
 
-        tx.commit()?;
-
-        let task = sqlite::read_task_by_id(&conn, task_number)?
+        // tx 内で読み戻し (read-after-write 保証 — commit 後に別プロセスが
+        // 書き換えた状態をレスポンスに混ぜない)。
+        let task = sqlite::read_task_by_id(&tx, task_number)?
             .ok_or_else(|| Error::Config("task disappeared after UPDATE".into()))?;
-        let reminds_map = sqlite::read_reminds_for_tasks(&conn, &[task_number])?;
+        let reminds_map = sqlite::read_reminds_for_tasks(&tx, &[task_number])?;
         let reminds = reminds_map.get(&task_number).cloned().unwrap_or_default();
+
+        tx.commit()?;
         (task, reminds)
     };
 

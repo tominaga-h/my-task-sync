@@ -803,3 +803,93 @@ async fn patch_without_auth_returns_401() {
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
+
+// ---------- S15: defensive tests ----------
+
+#[tokio::test]
+async fn patch_with_reminds_null_returns_400() {
+    // reminds は array 必須。null 送信は "クリア" の意味論を持たない
+    // (未送信で既存保持が自然)。明示 400 にする。
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    let resp = app
+        .oneshot(authed_patch("/api/tasks/1", json!({"reminds": null})))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(resp).await;
+    assert!(
+        body["error"].as_str().unwrap().contains("reminds"),
+        "error should mention reminds, got: {}",
+        body["error"]
+    );
+}
+
+#[tokio::test]
+async fn patch_with_non_numeric_path_returns_400() {
+    // axum 0.8 の Path<i64> 抽出が数値パース失敗で 400 を返すことを pin。
+    // 挙動が変わったら (例えば 404 になったら) CI で気づけるようにする。
+    let conn = make_my_task_db();
+    let app = app_with(conn);
+
+    let req = Request::builder()
+        .method(Method::PATCH)
+        .uri("/api/tasks/abc")
+        .header("Authorization", format!("Bearer {API_KEY}"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({"title": "x"})).unwrap(),
+        ))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+// ---------- S16: PATCH_ALLOWED_KEYS と merge block の同期 ----------
+
+#[tokio::test]
+async fn patch_with_all_fields_applies_each_one() {
+    // S16: allowlist に載っている 10 フィールド全てが merge ブロックで
+    // 実際に処理されていることを 1 リクエストで pin する。追加されたキーが
+    // silently 無視されていたら、レスポンスが送った値と一致せず test が落ちる。
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    let resp = app
+        .oneshot(authed_patch(
+            "/api/tasks/1",
+            json!({
+                "title": "full-patch",
+                "status": "done",
+                "source": "mobile",
+                "projectName": "work",
+                "due": "2026-07-01",
+                "doneAt": "2026-06-30",
+                "important": true,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "updatedAt": "2026-06-30T12:00:00Z",
+                "reminds": ["2026-07-15"]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let t = &body["task"];
+    assert_eq!(t["taskNumber"], 1);
+    assert_eq!(t["title"], "full-patch");
+    assert_eq!(t["status"], "done");
+    assert_eq!(t["source"], "mobile");
+    assert_eq!(t["projectName"], "work");
+    assert_eq!(t["due"], "2026-07-01");
+    assert_eq!(t["doneAt"], "2026-06-30");
+    assert_eq!(t["important"], true);
+    // createdAt / updatedAt は SQLite の日単位粒度で truncate される。
+    assert_eq!(t["createdAt"], "2026-01-01T00:00:00Z");
+    assert_eq!(t["updatedAt"], "2026-06-30T00:00:00Z");
+    assert_eq!(t["reminds"], json!(["2026-07-15"]));
+}
