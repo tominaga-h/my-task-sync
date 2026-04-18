@@ -16,6 +16,10 @@ use serde_json::json;
 pub enum Error {
     /// Configuration / CLI parsing problem (Fail Fast — never silently default).
     Config(String),
+    /// Client supplied invalid input (400). Handler が user 入力の検証に失敗
+    /// したときに返す。`msg` は原則そのままクライアントに返すので、内部情報
+    /// (ファイルパス等) を載せないこと。
+    BadRequest(String),
     /// SQLite operation failed.
     Sqlite(rusqlite::Error),
     /// HTTP transport failed (connection, TLS, body decode, …).
@@ -36,6 +40,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Config(msg) => write!(f, "config error: {msg}"),
+            Error::BadRequest(msg) => write!(f, "bad request: {msg}"),
             Error::Sqlite(e) => write!(f, "sqlite error: {e}"),
             Error::Reqwest(e) => write!(f, "http error: {e}"),
             Error::Io(e) => write!(f, "io error: {e}"),
@@ -55,7 +60,9 @@ impl std::error::Error for Error {
             Error::Io(e) => Some(e),
             Error::Toml(e) => Some(e),
             Error::Json(e) => Some(e),
-            Error::Config(_) | Error::Api { .. } | Error::Unauthorized => None,
+            Error::Config(_) | Error::BadRequest(_) | Error::Api { .. } | Error::Unauthorized => {
+                None
+            }
         }
     }
 }
@@ -65,11 +72,12 @@ impl std::error::Error for Error {
 /// クライアントには "internal error" だけ伝える (情報漏洩を避ける)。
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
-        let (status, message) = match &self {
-            Error::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
+        let (status, message): (StatusCode, String) = match &self {
+            Error::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".into()),
+            Error::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             _ => {
                 tracing::error!(error = %self, "server error");
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal error".into())
             }
         };
         (status, Json(json!({ "error": message }))).into_response()

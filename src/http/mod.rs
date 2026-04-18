@@ -14,6 +14,7 @@ use axum::{middleware, routing::get, Router};
 use rusqlite::Connection;
 
 pub mod auth;
+pub mod tasks;
 
 /// Shared state handed to every handler via `axum::extract::State`.
 ///
@@ -45,7 +46,8 @@ impl AppState {
 /// 401 より先に 404 として漏れるのを防ぐ。
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
-        // T3〜T7 のハンドラは順次ここに追加される。
+        .route("/tasks", get(tasks::list_tasks))
+        // T4〜T7 のハンドラは順次ここに追加される。
         .fallback(api_not_found)
         .layer(middleware::from_fn_with_state(
             state.clone(),

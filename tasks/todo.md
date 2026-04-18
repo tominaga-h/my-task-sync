@@ -34,11 +34,17 @@
 
 ## T3. GET /api/tasks
 
-- [ ] `src/sqlite.rs` に `read_tasks_filtered(conn, status, since, project, limit)`
-- [ ] `src/model.rs`: `SyncTask` → `TaskDto` リネーム、旧同期 DTO (`UnsyncedTask` / `ChangedTask` / `ChangesResponse` / `PushResponse` / `PushResultRow` / `PushAction` / `PatchNumberBody`) を削除、`TaskListResponse` 追加
-- [ ] `src/http/tasks.rs` (新規) に `list_tasks` ハンドラ
-- [ ] ルート登録: `get(list_tasks)`
-- [ ] 単体テスト: 空 / 3 件 / status フィルタ / since フィルタ / project フィルタ / limit / 不正 status 400 / 不正 since 400
+- [x] `src/error.rs` に `Error::BadRequest(String)` 追加 (400 のクライアント入力エラー用)
+- [x] `src/sqlite.rs` に `read_tasks_filtered(status, since, project, limit)` — 全 None で全件、`LIMIT -1` で unlimited
+- [x] `src/model.rs`: v1 DTO (`SyncTask` / `UnsyncedTask` / `ChangedTask` / `ChangesResponse` / `PushResponse` / `PushResultRow` / `PushAction` / `PatchNumberBody`) を削除。`TaskDto` + `TaskListResponse` + `TaskDto::from_task` 追加
+- [x] `tests/model_serde_test.rs` を `TaskDto` / `TaskListResponse` 向けに書き直し (8 → 5 件)
+- [x] `src/http/tasks.rs` (新規) に `list_tasks` ハンドラ + `ListParams`。status 許容値 validation / since YYYY-MM-DD parse → 400
+- [x] ルート登録: `/api/tasks` GET
+- [x] `tests/http_tasks_test.rs` 結合テスト 10 件: 空 / 3 件 JOIN / status / since / project / limit / 複合フィルタ / 不正 status 400 / 不正 since 400 / limit=-1 → Query 抽出 400
+- [x] `make check` 全緑 (fmt/check/clippy/test — 51 件)
+- [x] 実バイナリ smoke test: 実 SQLite に 2 件 seed → `/api/tasks` が JSON で返る / status フィルタ / 400 / 401 を確認
+
+→ **CP3 (初 write 経路の schema 整合性) は T5 で到来**
 
 ## T4. GET /api/tasks/:task_number
 

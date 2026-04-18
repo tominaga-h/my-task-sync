@@ -1,20 +1,18 @@
 //! Domain types and API DTOs.
 //!
-//! ドメイン型 (`Task` / `Status`) は SQLite モジュール内部用で、JSON には
-//! 露出しない。API DTO 群 (`SyncTask` / `UnsyncedTask` / `ChangedTask`
-//! / `ChangesResponse` / `PushResponse` / `PushResultRow` / `PushAction`)
-//! は my-own の `/api/sync/tasks/*` 仕様に従い camelCase でシリアライズ/
-//! デシリアライズする。
+//! ドメイン型 (`Task` / `Status`) は SQLite I/O 内部用で、JSON 面には露出
+//! しない。API DTO (`TaskDto` / `TaskListResponse`) は my-own から呼ばれる
+//! HTTP エンドポイントの shape を表し、camelCase でシリアライズする。
 //!
-//! NOTE: 仕様の一次情報は `docs/OVERVIEW.md` と本リポジトリのタスク指示書
-//! Open Question #1 を起点とした推論で確定した形状。my-own 側の実装が
-//! 入った時点で再検証すること。
+//! v1 にあった `SyncTask` / `UnsyncedTask` / `ChangedTask` / `ChangesResponse`
+//! / `PushResponse` / `PushAction` / `PatchNumberBody` は polling daemon
+//! 時代の push/pull API 向けで、v2 の逆方向 REST では不要 — T3 で削除。
 
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 // ------------------------------------------------------------------
-// Domain types (SQLite 側)
+// Domain types (SQLite-side)
 // ------------------------------------------------------------------
 
 /// my-task の `tasks.status` 列 (`open` / `done` / `closed`).
@@ -44,12 +42,8 @@ impl Status {
     }
 }
 
-/// SQLite から読み出した `tasks` 行。
-///
-/// `id` は SQLite の rowid (= `task_number`)。新規 INSERT 時は `0` を渡し、
-/// `sqlite::insert_task` が autoincrement 採番する。reminds は別テーブル
-/// (`task_reminds`) なので `Task` に含めず、必要な箇所で
-/// `sqlite::read_reminds_for_tasks` を別取得する。
+/// SQLite から読み出した `tasks` 行。reminds は別テーブルなので別途
+/// `sqlite::read_reminds_for_tasks` で取得する。
 #[derive(Debug, Clone)]
 pub struct Task {
     pub id: i64,
@@ -65,51 +59,17 @@ pub struct Task {
 }
 
 // ------------------------------------------------------------------
-// API DTO (camelCase)
+// API DTOs (camelCase JSON)
 // ------------------------------------------------------------------
 
-/// `POST /api/sync/tasks/push` リクエスト body の要素。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SyncTask {
-    pub task_number: i64,
-    pub title: String,
-    pub status: String,
-    pub source: String,
-    pub project_name: Option<String>,
-    pub due: Option<NaiveDate>,
-    pub done_at: Option<NaiveDate>,
-    pub important: bool,
-    pub updated_at: DateTime<Utc>,
-    pub created_at: DateTime<Utc>,
-    pub reminds: Vec<NaiveDate>,
-}
-
-/// `GET /api/sync/tasks/unsynced` の要素 (`task_number = NULL` のタスク)。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UnsyncedTask {
-    pub neon_id: i64,
-    pub title: String,
-    pub status: String,
-    pub source: String,
-    pub project_name: Option<String>,
-    pub due: Option<NaiveDate>,
-    pub done_at: Option<NaiveDate>,
-    pub important: bool,
-    pub updated_at: DateTime<Utc>,
-    pub created_at: DateTime<Utc>,
-    pub reminds: Vec<NaiveDate>,
-}
-
-/// `GET /api/sync/tasks/changes` の `tasks` 配列要素 (`task_number IS NOT NULL`)。
+/// HTTP 境界における task 表現。`task_number` は SQLite の rowid に等しい。
 ///
-/// 行の同定は `task_number` (= SQLite の rowid) で行うので、`neon_id` は
-/// このサイクルでは不要。サーバ側のレスポンスに `neonId` キーが含まれて
-/// いても serde はデフォルトで未知フィールドを無視する。
+/// `createdAt` / `updatedAt` は ISO 8601 文字列 (`DateTime<Utc>`) として
+/// 返す。SQLite 側は `NaiveDate` (日単位) なので、変換時は 00:00:00 UTC を
+/// 割り当てる。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ChangedTask {
+pub struct TaskDto {
     pub task_number: i64,
     pub title: String,
     pub status: String,
@@ -123,43 +83,36 @@ pub struct ChangedTask {
     pub reminds: Vec<NaiveDate>,
 }
 
-/// `GET /api/sync/tasks/changes` のレスポンス全体。
+impl TaskDto {
+    /// SQLite から読み出した `Task` + 関連 reminds を HTTP DTO に変換。
+    pub fn from_task(task: Task, reminds: Vec<NaiveDate>) -> Self {
+        Self {
+            task_number: task.id,
+            title: task.title,
+            status: task.status.as_str().to_string(),
+            source: task.source,
+            project_name: task.project,
+            due: task.due,
+            done_at: task.done_at,
+            important: task.important,
+            updated_at: date_to_dt(task.updated),
+            created_at: date_to_dt(task.created),
+            reminds,
+        }
+    }
+}
+
+/// `GET /api/tasks` のレスポンス。`serverTime` はクライアントが次回の
+/// `since` として使えるタイムスタンプ。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ChangesResponse {
-    pub tasks: Vec<ChangedTask>,
+pub struct TaskListResponse {
+    pub tasks: Vec<TaskDto>,
     pub server_time: DateTime<Utc>,
 }
 
-/// `POST /api/sync/tasks/push` のレスポンス。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PushResponse {
-    pub results: Vec<PushResultRow>,
-}
-
-/// `PushResponse.results` の要素。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PushResultRow {
-    pub task_number: i64,
-    pub action: PushAction,
-    pub neon_id: i64,
-}
-
-/// `PushResultRow.action` の取りうる値 (`created` / `updated` / `skipped_newer`)。
-///
-/// 未知の値は `serde` がエラーとする (Fail Fast)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PushAction {
-    Created,
-    Updated,
-    SkippedNewer,
-}
-
-/// task_number 書き戻し用の小さな DTO (`PATCH /api/sync/tasks/:id/number`)。
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PatchNumberBody {
-    pub task_number: i64,
+fn date_to_dt(d: NaiveDate) -> DateTime<Utc> {
+    d.and_hms_opt(0, 0, 0)
+        .expect("00:00:00 is a valid wall time")
+        .and_utc()
 }

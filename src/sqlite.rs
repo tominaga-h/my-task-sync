@@ -58,9 +58,9 @@ pub fn resolve_project(conn: &Connection, name: &str) -> Result<i64, Error> {
 /// Borrow-friendly view of a tasks row used by the insert/update helpers.
 ///
 /// SQLite に書き込む値の集合を 1 箇所に集約する。`Task` は SQLite から
-/// 読み出した行 (`id` 確定済み) を表すドメイン型なので、UnsyncedTask /
-/// ChangedTask など別 DTO から書き込む経路でも `Task` を作らずにここを
-/// 経由できるようにしている。
+/// 読み出した行 (`id` 確定済み) を表すドメイン型なので、write 経路の別
+/// DTO (例: T5 の POST body, T6 の PATCH) からも `Task` を経由せずに
+/// ここを通せるようにしている。
 pub struct TaskRow<'a> {
     pub title: &'a str,
     /// `tasks.status` の生値。CHECK 制約 (`open` / `done` / `closed`) で
@@ -228,6 +228,47 @@ pub fn read_tasks_since(conn: &Connection, since: &str) -> Result<Vec<Task>, Err
 /// Read every task (project name JOINed). Equivalent to `read_tasks_since(_, "")`.
 pub fn read_all_tasks(conn: &Connection) -> Result<Vec<Task>, Error> {
     read_tasks_since(conn, "")
+}
+
+/// Read tasks with optional filters for `GET /api/tasks`.
+///
+/// * `status`: exact match on `tasks.status` (`open` / `done` / `closed`).
+///   validation はハンドラ側で行う想定 — ここは SQL に渡すだけ。
+/// * `since`: `tasks.updated > since` を満たす行のみ (strict comparison)。
+/// * `project`: JOIN 後の `projects.name` に完全一致。`None` のときは
+///   project フィルタを掛けず、project 無しのタスクも含めて返す。
+/// * `limit`: 行数上限。`None` は無制限 (SQLite の `LIMIT -1`)。
+///
+/// どのフィルタも `None` のときは全件返す。
+pub fn read_tasks_filtered(
+    conn: &Connection,
+    status: Option<&str>,
+    since: Option<NaiveDate>,
+    project: Option<&str>,
+    limit: Option<u32>,
+) -> Result<Vec<Task>, Error> {
+    let since_str = since.map(format_date);
+    // SQLite は `LIMIT -1` を "無制限" として解釈する (公式文書)。
+    let limit_val: i64 = limit.map(i64::from).unwrap_or(-1);
+    let mut stmt = conn.prepare(
+        "SELECT
+             t.id, t.title, t.status, t.source,
+             p.name AS project_name,
+             t.due, t.done_at, t.created, t.updated, t.important
+         FROM tasks t
+         LEFT JOIN projects p ON t.project_id = p.id
+         WHERE (?1 IS NULL OR t.status = ?1)
+           AND (?2 IS NULL OR t.updated > ?2)
+           AND (?3 IS NULL OR p.name = ?3)
+         ORDER BY t.id
+         LIMIT ?4",
+    )?;
+    let rows = stmt.query_map(params![status, since_str, project, limit_val], row_to_task)?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
 }
 
 // ------------------------------------------------------------------
