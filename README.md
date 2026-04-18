@@ -7,6 +7,8 @@ authentication.
 
 Designed for a single user on a single machine — not a multi-tenant service.
 
+> 日本語版: [`docs/README_ja.md`](docs/README_ja.md)
+
 - Design spec: [`docs/SERVER_DESIGN.md`](docs/SERVER_DESIGN.md)
 - HTTP API reference: [`docs/API.md`](docs/API.md)
 - Migration plan & progress: [`tasks/plan.md`](tasks/plan.md), [`tasks/todo.md`](tasks/todo.md)
