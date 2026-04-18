@@ -184,8 +184,22 @@ fn read_all_tasks_returns_every_row_with_project_name_joined() {
     // Given: project が紐づくタスクと紐づかないタスク
     let conn = make_my_task_db();
     let pid = sqlite::resolve_project(&conn, "work").unwrap();
-    insert_raw_task(&conn, "with-project", "open", Some(pid), "2026-04-12", "2026-04-12");
-    insert_raw_task(&conn, "no-project", "open", None, "2026-04-12", "2026-04-12");
+    insert_raw_task(
+        &conn,
+        "with-project",
+        "open",
+        Some(pid),
+        "2026-04-12",
+        "2026-04-12",
+    );
+    insert_raw_task(
+        &conn,
+        "no-project",
+        "open",
+        None,
+        "2026-04-12",
+        "2026-04-12",
+    );
 
     // When
     let tasks = sqlite::read_all_tasks(&conn).expect("read_all_tasks");
@@ -222,8 +236,7 @@ fn read_reminds_for_tasks_groups_by_task_id_only_for_requested() {
     }
 
     // When: t1, t2 のみを要求
-    let map = sqlite::read_reminds_for_tasks(&conn, &[t1, t2])
-        .expect("read_reminds_for_tasks");
+    let map = sqlite::read_reminds_for_tasks(&conn, &[t1, t2]).expect("read_reminds_for_tasks");
 
     // Then
     assert_eq!(map.len(), 2, "only requested ids appear in map");
@@ -286,5 +299,8 @@ fn open_connection_sets_busy_timeout() {
     let timeout_ms: i64 = conn
         .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
         .unwrap();
-    assert!(timeout_ms > 0, "busy_timeout must be set (got {timeout_ms})");
+    assert!(
+        timeout_ms > 0,
+        "busy_timeout must be set (got {timeout_ms})"
+    );
 }
