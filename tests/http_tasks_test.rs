@@ -48,6 +48,16 @@ fn authed_post(uri: &str, body: Value) -> Request<Body> {
         .expect("build request")
 }
 
+fn authed_patch(uri: &str, body: Value) -> Request<Body> {
+    Request::builder()
+        .method(Method::PATCH)
+        .uri(uri)
+        .header("Authorization", format!("Bearer {API_KEY}"))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .expect("build request")
+}
+
 fn app_with(conn: Connection) -> axum::Router {
     router(AppState::new(conn, API_KEY.into()))
 }
@@ -567,6 +577,227 @@ async fn post_without_auth_returns_401() {
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::to_vec(&minimal_create_body()).unwrap(),
+        ))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+// ---------- PATCH /api/tasks/{task_number} (T6) ----------
+
+#[tokio::test]
+async fn patch_partial_title_only_keeps_other_fields() {
+    // seed: t1 = open/home/2026-04-10, remind 2026-04-20
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    let resp = app
+        .oneshot(authed_patch("/api/tasks/1", json!({"title": "renamed"})))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = body_json(resp).await;
+    let t = &body["task"];
+    assert_eq!(t["taskNumber"], 1);
+    assert_eq!(t["title"], "renamed");
+    // 以下は元の seed 値のまま
+    assert_eq!(t["status"], "open");
+    assert_eq!(t["projectName"], "home");
+    assert_eq!(t["reminds"], json!(["2026-04-20"]));
+}
+
+#[tokio::test]
+async fn patch_reminds_replaces_wholesale() {
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    let body = body_json(
+        app.oneshot(authed_patch(
+            "/api/tasks/1",
+            json!({"reminds": ["2026-05-01", "2026-05-10"]}),
+        ))
+        .await
+        .unwrap(),
+    )
+    .await;
+    // 既存の 2026-04-20 は消え、新しい 2 件で全置換。
+    assert_eq!(body["task"]["reminds"], json!(["2026-05-01", "2026-05-10"]));
+}
+
+#[tokio::test]
+async fn patch_without_reminds_key_preserves_existing() {
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    // reminds キー未送信なので既存 2026-04-20 が残るはず。
+    let body = body_json(
+        app.oneshot(authed_patch("/api/tasks/1", json!({"title": "x"})))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(body["task"]["reminds"], json!(["2026-04-20"]));
+}
+
+#[tokio::test]
+async fn patch_nullable_project_name_to_null_clears_it() {
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    // t1 は projectName=home。null 送信で未所属にクリアできること。
+    let body = body_json(
+        app.oneshot(authed_patch("/api/tasks/1", json!({"projectName": null})))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body["task"]["projectName"].is_null());
+}
+
+#[tokio::test]
+async fn patch_updated_at_auto_bumps_when_not_sent() {
+    // updatedAt 未送信 → サーバーが Utc::now() で更新 (今日の日付に書き換わる)。
+    // seed の t1 は updatedAt=2026-04-10T00:00:00Z。PATCH 後は今日に進む。
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    let before = chrono::Utc::now().date_naive();
+    let body = body_json(
+        app.oneshot(authed_patch("/api/tasks/1", json!({"title": "bumped"})))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let updated_str = body["task"]["updatedAt"].as_str().unwrap();
+    let updated_dt: chrono::DateTime<chrono::Utc> = updated_str.parse().unwrap();
+    // auto-bump された日付は今日と同日 (テスト実行時の境界で前後するのを
+    // 避けるため、before 以降を許容)。
+    assert!(
+        updated_dt.date_naive() >= before,
+        "updatedAt should be auto-bumped to today, got {updated_str}"
+    );
+    // seed の 2026-04-10 からは必ず進んでいること。
+    assert!(updated_dt.date_naive() > chrono::NaiveDate::from_ymd_opt(2026, 4, 10).unwrap());
+}
+
+#[tokio::test]
+async fn patch_updated_at_uses_sent_value_when_provided() {
+    // updatedAt を明示送信したときは auto-bump せず送信値を使う。
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    let body = body_json(
+        app.oneshot(authed_patch(
+            "/api/tasks/1",
+            json!({"title": "x", "updatedAt": "2026-06-15T08:00:00Z"}),
+        ))
+        .await
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(body["task"]["updatedAt"], "2026-06-15T00:00:00Z");
+}
+
+#[tokio::test]
+async fn patch_nonexistent_task_returns_404() {
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    let resp = app
+        .oneshot(authed_patch("/api/tasks/9999", json!({"title": "x"})))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let body = body_json(resp).await;
+    assert_eq!(body["error"], "not found");
+}
+
+#[tokio::test]
+async fn patch_with_task_number_in_body_returns_400() {
+    // URL 側の task_number が唯一の権威。body 側は禁止。
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    let resp = app
+        .oneshot(authed_patch(
+            "/api/tasks/1",
+            json!({"taskNumber": 99, "title": "x"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(resp).await;
+    assert!(body["error"].as_str().unwrap().contains("taskNumber"));
+}
+
+#[tokio::test]
+async fn patch_with_unknown_field_returns_400() {
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    let resp = app
+        .oneshot(authed_patch("/api/tasks/1", json!({"reminders": []})))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(resp).await;
+    assert!(body["error"].as_str().unwrap().contains("reminders"));
+}
+
+#[tokio::test]
+async fn patch_with_invalid_status_returns_400() {
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    let resp = app
+        .oneshot(authed_patch("/api/tasks/1", json!({"status": "wibble"})))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(resp).await;
+    assert!(body["error"].as_str().unwrap().contains("status"));
+}
+
+#[tokio::test]
+async fn patch_empty_body_is_a_noop_200() {
+    // `{}` はすべてのフィールドが未送信扱い。updatedAt だけ auto-bump する。
+    let conn = make_my_task_db();
+    seed_three_tasks(&conn);
+    let app = app_with(conn);
+
+    let resp = app
+        .oneshot(authed_patch("/api/tasks/1", json!({})))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(body["task"]["title"], "t1");
+    assert_eq!(body["task"]["projectName"], "home");
+    assert_eq!(body["task"]["reminds"], json!(["2026-04-20"]));
+}
+
+#[tokio::test]
+async fn patch_without_auth_returns_401() {
+    let conn = make_my_task_db();
+    let app = app_with(conn);
+
+    let req = Request::builder()
+        .method(Method::PATCH)
+        .uri("/api/tasks/1")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({"title": "x"})).unwrap(),
         ))
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();

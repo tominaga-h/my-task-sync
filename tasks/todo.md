@@ -68,10 +68,17 @@
 
 ## T6. PATCH /api/tasks/:task_number
 
-- [ ] `src/model.rs` に `TaskPatchDto` (全フィールド optional、serde `#[serde(default)]`)
-- [ ] `src/sqlite.rs` に `update_task_partial` (read → merge → write)
-- [ ] `src/http/tasks.rs` に `patch_task` ハンドラ + ルート登録
-- [ ] 単体テスト: title のみ / reminds 置換 / reminds 非送信で保持 / 不在 → 404 / taskNumber 混入 → 400
+- [x] `src/error.rs` に `Error::NotFound` + 404 マッピング追加
+- [x] `src/http/tasks.rs` に `patch_task` ハンドラ + 5 つの private helper (`patch_required_string` / `patch_required_bool` / `patch_nullable_string` / `patch_nullable_date` / `patch_required_date_from_datetime` + `parse_datetime_to_date` + `parse_reminds_array`)
+  - body は `Json<Value>` 受けで nullable 3 状態 (未送信 / null / 値) を explicit に区別
+  - `PATCH_ALLOWED_KEYS` allowlist で未知フィールドを 400 に
+  - `updatedAt` は未送信時 `Utc::now()` auto-bump、送信時は指定値を採用
+  - `taskNumber` 混入 → 400、存在しない task_number → 404
+- [x] `src/http/mod.rs` に `/tasks/{task_number}` の `.patch(patch_task)` を登録 (axum 0.8 の `{name}` 記法)
+- [x] 結合テスト (http_tasks_test.rs) 12 件追加: title のみ更新で他フィールド保持 / reminds 全置換 / reminds 未送信で保持 / projectName=null でクリア / updatedAt auto-bump / updatedAt 指定値 / 不在 → 404 / taskNumber 混入 → 400 / 未知フィールド → 400 / 不正 status → 400 / 空 `{}` no-op / 認証なし → 401
+- [x] `docs/API.md` に PATCH セクションを追加 (フィールド一覧 + 3 状態の説明 + curl 例) + 実装ステータス表を更新
+- [x] `make check` 全緑 — 合計 78 テスト
+- [x] 実バイナリ smoke test (mock tasks.db): 6 ケース全て期待どおり (title 更新 + auto-bump / projectName クリア / reminds 置換 / 404 / 400 taskNumber / 400 unknown)
 
 ## T7. GET /api/projects
 

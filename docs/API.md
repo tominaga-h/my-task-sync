@@ -7,8 +7,8 @@
 > | `GET /healthz`                  | T1            | ✅ 実装済み |
 > | `GET /api/tasks`                | T3            | ✅ 実装済み |
 > | `POST /api/tasks`               | T5            | ✅ 実装済み |
+> | `PATCH /api/tasks/:task_number` | T6            | ✅ 実装済み |
 > | `GET /api/tasks/:task_number`   | T4            | ⏳ 未実装   |
-> | `PATCH /api/tasks/:task_number` | T6            | ⏳ 未実装   |
 > | `GET /api/projects`             | T7            | ⏳ 未実装   |
 > | `GET /api/status`               | T11 (Phase 2) | ⏳ 未実装   |
 >
@@ -187,4 +187,84 @@ curl -X POST \
     "reminds": ["2026-04-22"]
   }' \
   localhost:3333/api/tasks
+```
+
+---
+
+## PATCH /api/tasks/:task_number
+
+既存タスクの部分更新。送ったフィールドだけ上書きされ、送らなかったフィールドは
+既存値が維持される。
+
+### パスパラメータ
+
+- `task_number` — 対象タスクの ID (= SQLite rowid)。数値パース失敗時は `400`、
+  該当タスクが存在しなければ `404`。
+
+### リクエスト body
+
+Content-Type: `application/json`。**body は JSON オブジェクト必須** (`null` や
+配列は `400`)。
+
+**許容フィールド** (全て optional):
+
+| フィールド    | 型                  | 動作                                            |
+|--------------|---------------------|------------------------------------------------|
+| `title`       | string              | 上書き                                         |
+| `status`      | `open`/`done`/`closed` | 上書き。他の値は `400`                        |
+| `source`      | string              | 上書き                                         |
+| `projectName` | string or `null`    | 値: 上書き (未登録プロジェクトは透過 INSERT) / `null`: 所属をクリア |
+| `due`         | `YYYY-MM-DD` or `null` | 値: 上書き / `null`: クリア                   |
+| `doneAt`      | `YYYY-MM-DD` or `null` | 値: 上書き / `null`: クリア                   |
+| `important`   | bool                | 上書き                                         |
+| `createdAt`   | RFC 3339 datetime   | 上書き (通常は送らない運用を想定)               |
+| `updatedAt`   | RFC 3339 datetime   | 送信時: その値で上書き / **未送信時: `Utc::now()` で auto-bump** |
+| `reminds`     | `YYYY-MM-DD` の配列 | 送信時: 全置換 / 未送信時: 既存を保持 / `null` は `400` |
+
+**禁止フィールド**:
+- `taskNumber` (URL 側が唯一の権威 — 含めると `400`)
+- 上記以外の未知フィールド (typo 防止 — `400`)
+
+**フィールドの 3 状態**: nullable フィールド (`projectName` / `due` / `doneAt`) は
+「未送信 (既存維持)」「`null` 送信 (クリア)」「値送信 (上書き)」の 3 通り。
+非 nullable フィールドは `null` 送信すると `400`。
+
+### 空 body の扱い
+
+`{}` は全フィールド未送信扱い → `updatedAt` だけ auto-bump され、他は変化なしで
+`200 OK` を返す (no-op + タイムスタンプ更新)。
+
+### レスポンス 200
+
+`POST` と同じ `{ task, serverTime }` 形 (書き戻し直後の完全な `TaskDto` を返す)。
+
+### レスポンス 404
+
+```json
+{"error": "not found"}
+```
+
+### 例
+
+```bash
+# タイトルだけ変更 (updatedAt は auto-bump される)
+curl -X PATCH \
+  -H "Authorization: Bearer $KEY" \
+  -H "content-type: application/json" \
+  -d '{"title":"renamed"}' \
+  localhost:3333/api/tasks/42
+
+# projectName をクリア
+curl -X PATCH \
+  -H "Authorization: Bearer $KEY" \
+  -H "content-type: application/json" \
+  -d '{"projectName":null}' \
+  localhost:3333/api/tasks/42
+
+# reminds を全置換
+curl -X PATCH \
+  -H "Authorization: Bearer $KEY" \
+  -H "content-type: application/json" \
+  -d '{"reminds":["2026-06-01","2026-06-10"]}' \
+  localhost:3333/api/tasks/42
 ```

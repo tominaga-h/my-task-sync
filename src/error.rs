@@ -34,6 +34,8 @@ pub enum Error {
     Api { status: u16, body: String },
     /// Bearer 認証に失敗 (ヘッダ欠損 / 形式不正 / トークン不一致)。
     Unauthorized,
+    /// リソースが見つからない (PATCH / GET by id で task_number 不在など)。
+    NotFound,
 }
 
 impl fmt::Display for Error {
@@ -48,6 +50,7 @@ impl fmt::Display for Error {
             Error::Json(e) => write!(f, "json error: {e}"),
             Error::Api { status, body } => write!(f, "api error {status}: {body}"),
             Error::Unauthorized => write!(f, "unauthorized"),
+            Error::NotFound => write!(f, "not found"),
         }
     }
 }
@@ -60,9 +63,11 @@ impl std::error::Error for Error {
             Error::Io(e) => Some(e),
             Error::Toml(e) => Some(e),
             Error::Json(e) => Some(e),
-            Error::Config(_) | Error::BadRequest(_) | Error::Api { .. } | Error::Unauthorized => {
-                None
-            }
+            Error::Config(_)
+            | Error::BadRequest(_)
+            | Error::Api { .. }
+            | Error::Unauthorized
+            | Error::NotFound => None,
         }
     }
 }
@@ -74,6 +79,7 @@ impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let (status, message): (StatusCode, String) = match &self {
             Error::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".into()),
+            Error::NotFound => (StatusCode::NOT_FOUND, "not found".into()),
             Error::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             _ => {
                 tracing::error!(error = %self, "server error");
