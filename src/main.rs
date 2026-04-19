@@ -109,8 +109,12 @@ async fn run(cfg: ResolvedConfig) -> Result<(), Error> {
     info!(%addr, "listening");
 
     // ngrok subprocess を bind 成功後に spawn (順序逆だと転送先が無い)。
-    // 未設定なら skip。`_ngrok_guard` は run() スコープが終わるまで保持
-    // され、Drop で child に SIGKILL が送られる (T10 で明示 kill に昇格)。
+    // 未設定なら skip。
+    //
+    // 変数名は `_ngrok_guard` だが **Drop が主目的** で "未使用" ではない
+    // (Rust の慣習では underscore prefix は compiler 警告抑止が趣旨)。
+    // run() のスコープが終わるまでバインドを保持 → Drop で child に
+    // SIGKILL が送られる。T10 で明示 `kill_and_wait()` + killpg に昇格予定。
     let _ngrok_guard = match cfg.ngrok.domain.as_deref() {
         Some(domain) => Some(ngrok::spawn(domain, cfg.server.port).await?),
         None => {

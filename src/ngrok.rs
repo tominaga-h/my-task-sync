@@ -21,6 +21,11 @@ use crate::error::Error;
 const NGROK_STDOUT_LOG: &str = "/tmp/my-task-sync-ngrok.out.log";
 const NGROK_STDERR_LOG: &str = "/tmp/my-task-sync-ngrok.err.log";
 
+// S20: 意図的に append モード。起動ごとに truncate するとデバッグ時に
+// 前回クラッシュの情報が飛ぶため。無制限成長のリスクがあるが、単一
+// ユーザーかつ launchctl 再起動頻度が低い運用想定では許容範囲。
+// 手動削除手順は T12 で README に追記する。
+
 /// 起動中の ngrok child を保持する RAII ガード。
 ///
 /// Drop で `start_kill()` を投げる (sync、fire-and-forget)。SIGKILL を
@@ -94,12 +99,19 @@ async fn spawn_internal(
     let stderr = open_append(stderr_path)?;
 
     let port_str = port.to_string();
-    let child = Command::new(program)
-        .args(["http", &port_str, "--domain", domain])
+    let mut cmd = Command::new(program);
+    cmd.args(["http", &port_str, "--domain", domain])
         .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
-        .spawn()
-        .map_err(|e| map_spawn_error(program, e))?;
+        .stderr(Stdio::from(stderr));
+
+    // 自プロセスグループ化 (S19 の defense-in-depth)。
+    // `process_group(0)` は "新しい PG を作り、pgid = child の pid にする"。
+    // ngrok 本体は v3 で fork しない想定だが、万一ヘルパーを spawn しても
+    // T10 の `killpg(pgid, SIGKILL)` で PG 全体を一括で殺せる。
+    #[cfg(unix)]
+    cmd.process_group(0);
+
+    let child = cmd.spawn().map_err(|e| map_spawn_error(program, e))?;
 
     let pid = child.id().unwrap_or(0);
     info!(
