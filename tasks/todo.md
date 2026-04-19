@@ -114,11 +114,79 @@
 
 ---
 
-## Phase 2 TODO (Phase 1 マージ後に解凍)
+## Phase 2 TODO
 
-- [ ] T9: ngrok 子プロセス spawn + `NgrokGuard` の Drop
-- [ ] T10: shutdown 拡張 (HTTP drain → `child.kill().await` → guard drop)
-- [ ] T11: `/api/status` (reqwest で localhost:4040/api/tunnels → 集約 JSON)
-- [ ] T12: `[ngrok].domain` 設定追加 + `config.example.toml` 更新
-- [ ] T13: README に ngrok authtoken セットアップ手順追記
-- [ ] CP6: Vercel 上 my-own から公開 URL 経由で結合テスト通過
+> Phase 1 + T8 (ローカル my-own 結合テスト) クリア済み。Phase 2 は ngrok
+> 自動起動 + `/api/status` を追加し、Vercel 上の my-own から public URL
+> 経由で到達可能にする。詳細は `tasks/plan.md` Phase 2 セクション参照。
+
+## T9. ngrok 設定 + 子プロセス spawn + Drop ガード
+
+- [ ] `src/config.rs` に `FileNgrok { domain: Option<String> }` / `NgrokConfig` 追加
+- [ ] 環境変数 `MY_TASK_SYNC_NGROK_DOMAIN` を `resolve()` に追加
+- [ ] `src/ngrok.rs` (新規):
+  - [ ] `struct NgrokGuard { child: Option<tokio::process::Child> }`
+  - [ ] `impl Drop` で `child.start_kill()` (再入可能・2 回呼ばれても安全)
+  - [ ] `pub async fn spawn(domain, port) -> Result<NgrokGuard, Error>`
+  - [ ] stdout/stderr を `/tmp/my-task-sync-ngrok.{out,err}.log` にリダイレクト
+  - [ ] ngrok バイナリ不在 (`io::ErrorKind::NotFound`) を `Error::Config` にマップ
+  - [ ] `Child::id()` を tracing::info! でログ
+- [ ] `src/lib.rs` に `pub mod ngrok;` 追加
+- [ ] `src/main.rs::run()` で bind 後に spawn し、guard を serve のスコープ内で保持
+- [ ] `config.example.toml` に `[ngrok]` セクション (コメント内プレースホルダ) 追加
+- [ ] 単体テスト: ngrok 不在時のエラーメッセージに "ngrok" が含まれる / Drop 2 回で panic しない
+- [ ] 手動確認: `[ngrok].domain` 設定で起動 → ngrok PID がログ出力 / `curl https://<domain>/healthz` → 200 / Ctrl-C で ngrok も消える
+
+## T10. graceful shutdown への統合
+
+- [ ] `src/ngrok.rs::NgrokGuard` に `pub async fn kill_and_wait(mut self) -> Result<(), Error>` 追加 (`child.kill().await` + `child.wait().await` → `self.child = None`)
+- [ ] `src/main.rs::run()` の shutdown フロー:
+  - [ ] HTTP serve drain 完了 or `GRACEFUL_SHUTDOWN_SECS` タイムアウト後に `guard.kill_and_wait()` を呼ぶ
+  - [ ] Drop ガードは panic / 早期 return / unwind の保険として残す
+- [ ] 手動確認: `kill -TERM <pid>` → my-task-sync 停止後に `ps aux | grep ngrok` で残っていないこと
+- [ ] 手動確認: `launchctl unload` サイクルでも ngrok 残存なし
+- [ ] panic 誘発テスト: Drop ガードが child を殺すこと (cfg(test) で強制 panic → teardown で ngrok PID 消失)
+
+## T11. `GET /api/status`
+
+- [ ] `src/http/status.rs` (新規) に `get_status` ハンドラ
+- [ ] server セクション: version / uptime_seconds / sqlite (path + ok)
+  - [ ] `AppState` に `started_at: Instant` を追加 (uptime 計算用)
+  - [ ] SQLite health check は `SELECT 1` で ok 判定
+- [ ] ngrok セクション: 3 状態 (disabled / unreachable / up)
+  - [ ] `reqwest::get("http://localhost:4040/api/tunnels")` を 2s timeout で呼ぶ
+  - [ ] `publicUrl` / `forwardingTo` / `httpRequestsTotal` / `httpRequestsPerMinute` (`rate1 * 60`) / `connectionsTotal` を抽出
+- [ ] `src/http/mod.rs`: `/api/status` を **認証 middleware の外側** に配置 (`nest("/api", ...)` との優先度に注意)
+- [ ] DTO (`StatusResponse` 等) を `src/model.rs` or `src/http/status.rs` に定義
+- [ ] 単体テスト 3 ケース (mock ngrok admin server を立てる or reqwest::Client を trait 差し替え):
+  - [ ] ngrok disabled → `{ "enabled": false }`
+  - [ ] ngrok unreachable → `{ "enabled": true, "reachable": false, "error": "..." }`
+  - [ ] ngrok up → `publicUrl` など全フィールド含む
+- [ ] 実バイナリ smoke test: 3 状態を curl で確認
+
+## T12. docs 更新
+
+- [ ] `docs/API.md`:
+  - [ ] ステータス表で `GET /api/status` を ✅ に
+  - [ ] 新規セクションで 3 状態のレスポンス例
+- [ ] `docs/SERVER_DESIGN.md` Phase 2 を「実装済み」へ、`/api/status` shape を実装と揃える
+- [ ] `README.md` + `docs/README_ja.md`:
+  - [ ] Install に `brew install ngrok` + `ngrok config add-authtoken ...` + `ngrok config check`
+  - [ ] Configure に `[ngrok].domain` の例
+  - [ ] Manage に `curl localhost:3333/api/status` で到達性確認
+- [ ] `config.example.toml` に `[ngrok]` セクション (コメント内のプレースホルダ)
+- [ ] `docs/MY_OWN_INTEGRATION.md` Phase 2 セクションを更新 (ngrok URL への env 切替 + `/api/status` で到達性確認)
+
+## T13. CP6 — Vercel 上 my-own からの結合テスト
+
+- [ ] ngrok 稼働中に `curl https://<domain>/healthz` → 200
+- [ ] `curl https://<domain>/api/status | jq '.ngrok.reachable'` → `true`
+- [ ] Vercel my-own の env を更新: `MY_TASK_SYNC_BASE_URL=https://<domain>`
+- [ ] my-own 本番 (Vercel) でタスク一覧が表示
+- [ ] my-own UI で新規作成 → `my-task ls` で確認
+- [ ] CLI で `my-task add` → my-own 本番で確認
+- [ ] my-task-sync Ctrl-C → my-own が 502 エラー表示 (期待通り)
+- [ ] my-task-sync 再起動 → my-own 回復
+- [ ] `tasks/phase2-integration-check-YYYY-MM-DD.md` に checklist 結果を記録
+
+→ **CP6 到達 = Phase 2 完了**

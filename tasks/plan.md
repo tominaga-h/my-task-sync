@@ -289,14 +289,273 @@ tower-http = { version = "0.6", features = ["trace"] }
 | PATCH の部分更新でフィールドを誤って null 化 | `Option<Option<T>>` で「送らない」と「null 送る」を区別するのではなく、null 送信を `Some(None)` とせず常に「送らない = 変更しない」扱いに統一 (serde `#[serde(default, skip_serializing_if = "Option::is_none")]` で対応) |
 | `launchctl` 下で SIGTERM を受けた際 in-flight が落ちる | `axum::serve::with_graceful_shutdown` + `KeepAlive` プラストでタイムアウト確保 |
 
-## Phase 2 スケッチ (着手は Phase 1 マージ後)
+---
 
-- **T9** ngrok child spawn + NgrokGuard (Drop で `start_kill`)
-- **T10** shutdown flow 拡張 (HTTP drain → `child.kill().await` → guard drop)
-- **T11** `/api/status` 実装 (localhost:4040/api/tunnels を reqwest で取得 → 集約 JSON)
-- **T12** `[ngrok]` 設定セクション / 環境変数 / `config.example.toml` 更新
-- **T13** README の Install セクションに ngrok authtoken 設定手順を追記
-- **CP6** Vercel 上 my-own から公開 URL 経由で Phase 1 と同じ結合テストが通る
+# Phase 2 実装プラン: ngrok 自動起動 + /api/status
+
+> **前提**: Phase 1 完了 (T8 までマージ済み)。my-own 側の統合は
+> `docs/MY_OWN_INTEGRATION.md` 通りに実装済みでローカル結合テスト合格。
+
+## ゴール
+
+my-task-sync 起動時に ngrok サブプロセスを自動起動し、予約ドメインで
+Vercel 上の my-own から到達可能にする。運用時の到達性確認用に
+`/api/status` (認証なし) を生やす。launchctl の再起動サイクルと
+SIGTERM で ngrok 子プロセスが確実に後片付けされること。
+
+## スコープ (In)
+
+- `[ngrok].domain` 設定 + 起動時の ngrok 子プロセス起動
+- `NgrokGuard` (Drop で子プロセスを確実に殺す)
+- graceful shutdown への統合 (HTTP drain → ngrok kill → exit)
+- `GET /api/status` (認証なし、`server` / `ngrok` を集約 JSON で返す)
+- ngrok バイナリ不在時の fail-fast
+- `docs/API.md` / README 両言語版 / `config.example.toml` 更新
+- Vercel 上 my-own からの結合テスト (手動 checklist)
+
+## スコープ (Out)
+
+- ngrok 以外のトンネル (cloudflared / tailscale funnel 等)
+- ngrok authtoken のコード側管理 (ngrok バイナリにまかせる)
+- ngrok admin ポート (`4040`) 以外のカスタマイズ
+- Prometheus 形式メトリクス (`/api/status` の JSON で足りる範囲で完結)
+- Phase 3 以降の構想 (楽観ロック / マルチユーザー)
+
+## 依存グラフ
+
+```
+T9 (config + spawn + Drop guard)
+ └─► T10 (shutdown integration)
+      └─► T11 (/api/status endpoint)
+           └─► T12 (docs 更新)
+                └─► T13 (Vercel 結合テスト = CP6)
+```
+
+T9→T10 は同じ `NgrokGuard` 型を共有するので順に進める。T11 は T9 が終わ
+れば着手可 (Ngrok 稼働中に curl で /api/tunnels を叩ける状態なら独立)。
+
+---
+
+### T9. ngrok 設定 + 子プロセス spawn + Drop ガード
+
+**目的**: `[ngrok].domain` を設定した状態で my-task-sync を起動すると、
+ngrok サブプロセスが自動で立ち上がり、HTTP サーバーの寿命と同期する
+状態を作る。
+
+**変更**:
+- `Cargo.toml`: 依存追加なし (tokio::process は既に tokio full で有効)
+- `src/config.rs`:
+  - `FileConfig` に `ngrok: Option<FileNgrok>` 追加
+  - `FileNgrok { domain: Option<String> }`
+  - `ResolvedConfig` に `ngrok: NgrokConfig` 追加
+  - `NgrokConfig { domain: Option<String> }` (None なら spawn しない)
+  - 環境変数 `MY_TASK_SYNC_NGROK_DOMAIN` の上書きを `resolve()` に追加
+- `src/ngrok.rs` (新規):
+  - `struct NgrokGuard { child: Option<tokio::process::Child> }`
+  - `impl Drop for NgrokGuard { fn drop(&mut self) { let _ = child.start_kill(); } }`
+  - `pub async fn spawn(domain: &str, port: u16) -> Result<NgrokGuard, Error>`
+    - `tokio::process::Command::new("ngrok")`
+    - `.args(["http", &port.to_string(), "--domain", domain])`
+    - stdout/stderr を `/tmp/my-task-sync-ngrok.{out,err}.log` にリダイレクト
+    - ngrok バイナリ不在 (`io::ErrorKind::NotFound`) → `Error::Config` で fail-fast
+    - `Child::id()` を tracing::info! でログ
+- `src/lib.rs`: `pub mod ngrok;` 追加
+- `src/main.rs::run()`:
+  - サーバー bind 成功後・serve 開始前に `ngrok::spawn` 呼び出し (domain が Some のとき)
+  - 戻り値 `NgrokGuard` を let で保持して serve のスコープ内で生存させる
+  - 未設定時は guard = None でスキップ
+- `config.example.toml`: `[ngrok]` セクション追加
+- `tests/common/` にモックは書かない (実 ngrok に依存しないよう Drop /
+  spawn のエラーパスを集中テスト)
+
+**受け入れ条件**:
+- `[ngrok].domain` 未設定で `cargo run` → サーバー起動、ngrok 起動なし (ログに `ngrok disabled (no domain configured)` 等)
+- `[ngrok].domain = "x.ngrok-free.dev"` で `cargo run` → ngrok バイナリが PATH にあれば child 起動、PID がログ出力
+- ngrok バイナリ不在 → 起動時 exit(1) + 明示的エラーメッセージ
+- `cargo run` → Ctrl-C (T10 前の簡易確認) で **ngrok プロセスも止まる** (ps で残存しない)
+- `MY_TASK_SYNC_NGROK_DOMAIN=foo.ngrok-free.dev cargo run` で env 経由設定が効く
+- unit tests: NgrokGuard::drop が 2 回呼ばれても安全 (再入可能) / Error::Config メッセージに "ngrok" を含む
+
+**検証手順**:
+1. `cargo build --release`
+2. `ngrok` が PATH にあること (`which ngrok`)
+3. ngrok authtoken 設定済みであること (`ngrok config check`)
+4. `[ngrok].domain` 設定して `cargo run` → ログに "listening" + "ngrok started pid=<N>" が両方出る
+5. `curl https://<domain>.ngrok-free.dev/healthz` → 200 "ok"
+6. Ctrl-C → ngrok プロセスが ps に残っていないこと
+
+**懸念・リスク**:
+- ngrok 無料プランは同一 authtoken で 1 tunnel 制限 → 二重起動すると conflict。launchctl KeepAlive で突貫再起動する時に衝突する可能性。対策: `T9` では愚直に child spawn し、`T10` の shutdown で確実に kill する
+- authtoken が ngrok バイナリの config (`~/.ngrok2/ngrok.yml`) に保存されている前提。T12 (docs) で手順を README に追記
+
+---
+
+### T10. graceful shutdown への統合
+
+**目的**: SIGINT/SIGTERM 受信時、HTTP drain 完了を待ってから ngrok child
+に明示的 kill を投げ、Drop guard はあくまで "panic / 早期 return /
+unwind" の保険として機能させる。
+
+**変更**:
+- `src/main.rs::run()`:
+  - shutdown_signal を受けたら:
+    1. HTTP serve の graceful drain を起動 (既存の `with_graceful_shutdown` 経由)
+    2. drain 完了後 or `GRACEFUL_SHUTDOWN_SECS` タイムアウト後に、
+       保持している `NgrokGuard::kill_and_wait()` を呼ぶ (新メソッド)
+    3. `child.wait()` で reaper 処理を完了させ、ゾンビ回避
+  - drop 順序: `NgrokGuard` → `TcpListener` / `Router` の順 (ngrok を先に殺すと
+    Vercel 側のリクエストが即座にエラーになる。逆だと HTTP は生きてるのに
+    外からは見えない期間ができる。現実的には serve drain が先で OK)
+- `src/ngrok.rs`:
+  - `impl NgrokGuard { pub async fn kill_and_wait(mut self) -> Result<(), Error> }` 追加
+  - 内部で `child.kill().await` + `child.wait().await`
+  - `self.child = None` にして Drop での再 kill を無害化
+
+**受け入れ条件**:
+- Ctrl-C → HTTP drain 完了 → ngrok kill → プロセス終了、の順でログ出力
+- `kill_and_wait` 成功後に Drop が発火しても `start_kill` が再呼び出しされない (child = None)
+- `launchctl unload` → ngrok プロセスも消える (ps で残存しない)
+- panic 誘発テスト (cfg(test) の強制パニック) → Drop ガードが子を殺すこと
+- `GRACEFUL_SHUTDOWN_SECS` 超過時でも ngrok kill は実行される
+
+**検証手順**:
+1. ローカルで起動 → ps で ngrok PID を控える → Ctrl-C → `ps <PID>` で消失確認
+2. `kill -TERM <pid of my-task-sync>` → 同上
+3. panic テスト (cargo test の `#[should_panic]`) で Drop 動作を pin
+
+---
+
+### T11. `GET /api/status` エンドポイント
+
+**目的**: 認証なしで叩けて、server / ngrok の状態を集約 JSON で返す運用
+エンドポイント。公開 URL が機能しているかを my-own デプロイ前に curl で
+確認したい。
+
+**変更**:
+- `src/http/status.rs` (新規):
+  - `pub async fn get_status(State<AppState>) -> Result<Json<StatusResponse>, Error>`
+  - 処理:
+    1. server セクションを組み立て (version は `env!("CARGO_PKG_VERSION")`, uptime は起動時刻を `AppState` に追加)
+    2. SQLite に `SELECT 1` を発行して `sqlite.ok` を判定
+    3. ngrok 設定済みなら `reqwest::get("http://localhost:4040/api/tunnels")` で `/api/tunnels` を叩き、最初の tunnel の `public_url` / `config.addr` / `metrics.http.{count,rate1}` / `metrics.conns.count` を抽出
+    4. ngrok 未設定: `{ "enabled": false }` のみ
+    5. ngrok 到達不能: `{ "enabled": true, "reachable": false, "error": "..." }`
+- `src/http/mod.rs`:
+  - `pub mod status;`
+  - **認証 middleware の外側に** `/api/status` を配置するため、ネスト構造を見直す:
+    ```
+    Router::new()
+      .route("/healthz", get(healthz))
+      .route("/api/status", get(status::get_status))   // ← unauthenticated
+      .nest("/api", api_with_auth)                      // ← Bearer 必須
+    ```
+    ただし `/api/status` が `nest("/api", ...)` のルート解決優先度に
+    巻き込まれないか確認。もし問題なら `/status` (非 /api) に移す案も検討
+- `src/model.rs` もしくは `src/http/status.rs` 内に DTO:
+  - `StatusResponse { server: ServerStatus, ngrok: NgrokStatus }`
+  - `ServerStatus { version, uptime_seconds, sqlite: SqliteStatus }`
+  - `SqliteStatus { path, ok }`
+  - `NgrokStatus` は enum ({Disabled, Unreachable{error}, Up{...}}) で JSON は `enabled` / `reachable` / metrics 等をフラットに並べる
+- `AppState` に `started_at: Instant` を追加 (uptime 計算用)
+
+**受け入れ条件**:
+- `curl /api/status` (認証なし) → 200 JSON
+- 認証不要ルート: Bearer ヘッダ無しで叩ける (middleware を跨がないこと)
+- レスポンスの形 (ngrok 3 状態):
+  - `{ "server": {...}, "ngrok": { "enabled": false } }`
+  - `{ "server": {...}, "ngrok": { "enabled": true, "reachable": false, "error": "..." } }`
+  - `{ "server": {...}, "ngrok": { "enabled": true, "reachable": true, "publicUrl": "...", "forwardingTo": "...", "httpRequestsTotal": ..., "httpRequestsPerMinute": ..., "connectionsTotal": ... } }`
+- `rate1` (秒レート) * 60 = `httpRequestsPerMinute` として返す
+- `serverTime` も含めるかは任意だが、他エンドポイントと揃える意味では入れる
+- 単体テスト: mock ngrok admin (tests/support に簡易 server を建てる)、または reqwest::Client を差し替え可能にして 3 状態を pin
+
+**検証手順**:
+1. `cargo test http::status` (ngrok 到達成功 / 失敗 / 無効の 3 ケース)
+2. 実 ngrok 稼働状態で `curl localhost:3333/api/status | jq` → 期待形
+3. ngrok 停止状態で `curl ...` → `enabled: true, reachable: false`
+4. `[ngrok].domain` 未設定状態で `curl ...` → `enabled: false`
+
+---
+
+### T12. docs 更新
+
+**目的**: Phase 2 完了時点の仕様を README / API.md / config.example.toml /
+SERVER_DESIGN.md に反映。
+
+**変更**:
+- `docs/API.md`:
+  - エンドポイント表で `GET /api/status` を ✅ 実装済みに
+  - 新規セクション: GET /api/status のレスポンス例 (3 状態すべて)
+- `docs/SERVER_DESIGN.md`:
+  - Phase 2 セクションを「実装済み」に更新
+  - `/api/status` のレスポンス shape の記述を実装と揃える
+- `README.md` / `docs/README_ja.md`:
+  - Install セクションに ngrok authtoken セットアップ手順を追記:
+    ```bash
+    brew install ngrok    # 未インストールなら
+    ngrok config add-authtoken <token>
+    ngrok config check    # 動作確認
+    ```
+  - Configure セクションに `[ngrok].domain` を追加
+  - Manage セクションに "公開 URL 確認" として `curl localhost:3333/api/status` を追加
+- `config.example.toml`: `[ngrok]` セクションを非コメントで追加 + `domain` をプレースホルダに
+- `docs/MY_OWN_INTEGRATION.md`:
+  - Phase 2 セクションを更新 (ngrok URL への env 切り替え手順を確定 / `/api/status` で到達性確認できる旨)
+
+**受け入れ条件**:
+- README の手順だけで ngrok セットアップから my-task-sync 起動までできる
+- `docs/API.md` の `/api/status` 節が 3 状態のレスポンス例を載せる
+- `config.example.toml` をコピーしただけでは ngrok 起動しない (`domain = ""` or コメントアウト状態で出荷)
+
+---
+
+### T13. Vercel 上 my-own からの結合テスト = CP6
+
+**目的**: ngrok 経由で Vercel 上の my-own から Phase 1 と同等の CRUD が
+動くことを手動で確認 (Phase 2 の最終ゲート)。
+
+**前提**: my-own 側が `docs/MY_OWN_INTEGRATION.md` 通りに実装済みで、
+Vercel に本番デプロイされていること。
+
+**受け入れ条件** (全項目チェック):
+- [ ] my-task-sync をローカルで起動、ngrok トンネル稼働中
+- [ ] `curl https://<domain>.ngrok-free.dev/healthz` → 200
+- [ ] `curl https://<domain>.ngrok-free.dev/api/status | jq '.ngrok.reachable'` → `true`
+- [ ] Vercel my-own の env を更新 (`MY_TASK_SYNC_BASE_URL=https://<domain>.ngrok-free.dev`)
+- [ ] my-own 本番 URL (Vercel) → タスク一覧が表示される
+- [ ] my-own で新規タスク作成 → 反映される (`my-task ls` で確認)
+- [ ] CLI で `my-task add` → my-own で表示
+- [ ] my-task-sync を Ctrl-C → my-own が 502 エラー表示 (期待通り)
+- [ ] my-task-sync 再起動 → ngrok 自動起動 → my-own が回復
+
+**成果物**: `tasks/phase2-integration-check-YYYY-MM-DD.md` に checklist 結果を記録。
+
+---
+
+## Phase 2 チェックポイント
+
+| CP | 位置 | ゲート |
+|----|------|-------|
+| **CP6** | T13 完了 | ngrok 経由で Vercel → my-task-sync が動く。Phase 1 と同等の CRUD が public URL 経由で通る |
+
+## Phase 2 見積もり (参考)
+
+- T9: 2-3h (ngrok spawn + Drop guard + エラー経路)
+- T10: 1h (shutdown 統合 + テスト)
+- T11: 2h (status 集約 + mock ngrok の tests 設計)
+- T12: 1h (docs 更新)
+- T13: 1h (手動結合テスト)
+- **Phase 2 合計**: 半日〜1 日
+
+## Phase 2 リスクと緩和策
+
+| リスク | 緩和策 |
+|------|-------|
+| ngrok 孤児プロセスが残り、二重起動で authtoken 衝突 | Drop ガード + 明示 kill の二段構え。T10 で panic 時の動作を pin |
+| ngrok バイナリが PATH にない環境で黙って起動 | `spawn()` で `io::ErrorKind::NotFound` を即座に `Error::Config` にマップ、その旨をメッセージに入れる |
+| ngrok admin API (:4040) の port が他プロセスと競合 | `/api/status` の reqwest を short timeout (2s) にして、到達不能状態を正常フローで扱う |
+| `/api/status` が認証なしで metrics を公開し情報漏洩 | public_url と forwardingTo は既に URL に出ており機密性なし。metrics も数値だけ。api_key は絶対に漏らさない (Debug に注意 — 既に S2 で redact 検討済) |
+| ngrok 無料プランの同時 1 tunnel 制限 | launchctl `ThrottleInterval` を設定 (30s 以上推奨) して再起動時の衝突を減らす |
 
 ## 見積もり (参考)
 
