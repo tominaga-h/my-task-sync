@@ -2,14 +2,23 @@
 #
 # Copy to ~/.config/my-task-sync/config.toml and edit `api_key`.
 # Environment variables (MY_TASK_SYNC_API_KEY / MY_TASK_SYNC_PORT /
-# MY_TASK_DATA_FILE) take precedence over the values below.
+# MY_TASK_DATA_FILE / MY_TASK_SYNC_NGROK_DOMAIN) take precedence over the
+# values below.
 
 [sqlite]
-# my-task の SQLite パス (省略時: $XDG_DATA_HOME/my-task/tasks.db)
+# my-task の SQLite パス (省略時: ~/Library/Application Support/my-task/tasks.db)
 # path = "/custom/path/tasks.db"
 
 [server]
 port    = 3333
 api_key = "your-api-key-here"
 
-# [ngrok] section is added in Phase 2.
+# [ngrok] — optional. If `domain` is set, my-task-sync launches
+# `ngrok http <port> --domain <domain>` as a subprocess on startup
+# and exposes the loopback port publicly. Requires:
+#   - `ngrok` binary in PATH (`brew install ngrok`)
+#   - `ngrok config add-authtoken <token>` done once
+#   - a reserved domain from https://dashboard.ngrok.com/cloud-edge/domains
+# Leave commented out for local-only use (no public URL).
+# [ngrok]
+# domain = "your-reserved-name.ngrok-free.dev"

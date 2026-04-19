@@ -1,6 +1,6 @@
 # my-task-sync HTTP API
 
-> Phase 1 進行中。エンドポイントは段階的に追加される:
+> Phase 2 まで実装完了。現在のエンドポイント一覧:
 >
 > | エンドポイント                  | タスク        | 状態        |
 > | ------------------------------- | ------------- | ----------- |
@@ -10,18 +10,18 @@
 > | `POST /api/tasks`               | T5            | ✅ 実装済み |
 > | `PATCH /api/tasks/:task_number` | T6            | ✅ 実装済み |
 > | `GET /api/projects`             | T7            | ✅ 実装済み |
-> | `GET /api/status`               | T11 (Phase 2) | ⏳ 未実装   |
+> | `GET /api/status`               | T11 (Phase 2) | ✅ 実装済み |
 >
 > エンドポイントの追加・変更時はこのドキュメントも同時に更新すること。
 
 ## 共通ルール
 
 - **bind アドレス**: `127.0.0.1:<port>` (デフォルト `3333`)。
-  外部アクセスは Phase 2 で ngrok 経由になる。
-- **認証**: `/api/*` は全て `Authorization: Bearer <api_key>` を要求する
+  外部アクセスは Phase 2 の ngrok サブプロセス経由。
+- **認証**: `/api/*` は原則 `Authorization: Bearer <api_key>` を要求する
   (`[server].api_key` または `MY_TASK_SYNC_API_KEY` で設定)。
-- **`/healthz`** は意図的に認証不要。運用者がトークン無しで死活確認できる
-  ようにするため。
+- **`/healthz`** と **`/api/status`** は意図的に認証不要。運用者が
+  トークン無しで死活確認・公開 URL 確認できるようにするため。
 - **エンコーディング**: リクエスト / レスポンスの JSON body は
   **camelCase** キー。
 - **日付形式** (`due`, `doneAt`, `reminds[]`): `YYYY-MM-DD`。
@@ -352,4 +352,83 @@ curl -X PATCH \
 
 ```bash
 curl -H "Authorization: Bearer $KEY" localhost:3333/api/projects
+```
+
+---
+
+## GET /api/status
+
+サーバー / ngrok トンネルの現状を集約した運用診断エンドポイント。
+**認証なし** — public URL が機能しているかを deploy 前に curl で確認する
+ユースケース用。
+
+### セキュリティ注意
+
+- Bearer を要求しないので、**ngrok URL は secret 扱い** にすること
+  (`https://<your>.ngrok-free.dev/api/status` を叩けば誰でもレスポンスが
+  読める)。ngrok の reserved domain は推測困難だが、漏れたら即ローテート
+  する前提で運用する
+- `sqlite.path` はユーザー名を漏らさないよう `$HOME` 配下を `~/...` に
+  置換して返す
+
+### レスポンス 200 (ngrok 無効 = `[ngrok].domain` 未設定)
+
+```json
+{
+  "server": {
+    "version": "0.1.0",
+    "uptimeSeconds": 12345,
+    "sqlite": { "path": "~/Library/Application Support/my-task/tasks.db", "ok": true }
+  },
+  "ngrok": { "enabled": false }
+}
+```
+
+### レスポンス 200 (ngrok 有効・到達不能)
+
+ngrok 設定は有ったが、`localhost:4040/api/tunnels` に到達できなかった
+場合 (ngrok プロセスが起動前 / 異常終了 など):
+
+```json
+{
+  "server": { "...": "..." },
+  "ngrok": {
+    "enabled": true,
+    "reachable": false,
+    "error": "ngrok admin unreachable: error sending request for url (http://localhost:4040/api/tunnels)"
+  }
+}
+```
+
+### レスポンス 200 (ngrok 有効・稼働中)
+
+```json
+{
+  "server": { "...": "..." },
+  "ngrok": {
+    "enabled": true,
+    "reachable": true,
+    "publicUrl": "https://<your>.ngrok-free.dev",
+    "forwardingTo": "http://localhost:3333",
+    "httpRequestsTotal": 56,
+    "httpRequestsPerMinute": 42.83,
+    "connectionsTotal": 50
+  }
+}
+```
+
+**メトリクスについて**:
+- `httpRequestsTotal` — ngrok 起動以降の HTTP リクエスト累計
+- `httpRequestsPerMinute` — 直近 1 分間の秒レート (`metrics.http.rate1`) を
+  分あたりに換算した値 (× 60)
+- `connectionsTotal` — ngrok tunnel への TCP 接続数の累計
+
+### 例
+
+```bash
+# 認証不要
+curl -sS localhost:3333/api/status | jq
+
+# 公開 URL 経由で Vercel から叩けるかの確認
+curl -sS https://<your>.ngrok-free.dev/api/status | jq '.ngrok.reachable'
 ```

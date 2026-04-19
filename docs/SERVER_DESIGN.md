@@ -44,12 +44,12 @@ my-task (CLI) ──writes──► SQLite ◄──reads/writes── my-task-s
 
 ## フェーズ分割
 
-| フェーズ    | 範囲                                                     | 検証ゴール                                                            |
-| ----------- | -------------------------------------------------------- | --------------------------------------------------------------------- |
-| **Phase 1** | REST サーバー骨格 + `/api/tasks` + `/api/projects`       | ローカル my-own と直結し、タスク CRUD が双方向に動くことを手動確認    |
-| **Phase 2** | ngrok サブプロセス自動起動 + Drop ガード + `/api/status` | Vercel 上の my-own から公開 URL 経由で Phase 1 と同等に動くことを確認 |
+| フェーズ    | 範囲                                                     | 状態                    |
+| ----------- | -------------------------------------------------------- | ----------------------- |
+| **Phase 1** | REST サーバー骨格 + `/api/tasks` + `/api/projects`       | ✅ 実装完了 (ローカル結合テスト済み) |
+| **Phase 2** | ngrok サブプロセス自動起動 + Drop ガード + `/api/status` | ✅ コード実装完了 (CP6 Vercel 結合テスト待ち) |
 
-Phase 間で PR を分割する。Phase 1 が動かないまま Phase 2 を載せない。
+Phase 間で PR を分割する。Phase 1 が動かないまま Phase 2 を載せない (実施済み)。
 
 ---
 
@@ -214,7 +214,10 @@ src/
 
 ## Phase 2: ngrok 子プロセス管理 + /api/status
 
-### 設定追加
+**実装完了**。詳細は `docs/API.md` (GET /api/status) と `src/ngrok.rs` を参照。
+ここでは採用した設計の要点だけを記録する。
+
+### 設定
 
 ```toml
 [ngrok]
@@ -222,67 +225,48 @@ domain = "unedified-carrie-nondiathermanous.ngrok-free.dev"  # ngrok 予約ド�
 # 未設定なら ngrok を起動しない (ローカル開発 / テスト用)
 ```
 
-### ngrok 起動
+env `MY_TASK_SYNC_NGROK_DOMAIN` で上書き可能 (既存 MY_TASK_SYNC_* 慣習)。
+
+### ngrok 起動 (`src/ngrok.rs::spawn`)
 
 - `tokio::process::Command::new("ngrok").args(["http", &port, "--domain", &domain])`
-- stdout/stderr は `/tmp/my-task-sync-ngrok.{out,err}.log` にリダイレクト
+- `#[cfg(unix)] cmd.process_group(0)` で自プロセスグループ化 (shutdown 時に
+  `killpg` で PG 一括 kill できるように)
+- stdout/stderr は `/tmp/my-task-sync-ngrok.{out,err}.log` に **append**
+  モードで redirect (前回クラッシュ情報保全のため)
 - サーバーが bind 成功後に spawn (順序逆だとトンネル先が無い)
 - ngrok バイナリが PATH に無ければ起動時に `Error::Config` で fail-fast
+  (メッセージは `brew install ngrok` / `ngrok config add-authtoken` を案内)
 
-### Drop ガード
+### shutdown フロー (`src/main.rs`)
 
-```rust
-struct NgrokGuard {
-    child: Option<tokio::process::Child>,
-}
+1. SIGINT / SIGTERM 受信 → oneshot channel で serve の drain trigger 発火
+2. `axum::serve` の graceful shutdown が完走 or `GRACEFUL_SHUTDOWN_SECS=10s`
+   deadline 超過
+3. `NgrokGuard::kill_and_wait()` を `tokio::time::timeout(10s)` で包んで呼ぶ:
+   - `libc::killpg(pgid, SIGKILL)` で PG 全体を SIGKILL
+   - `ESRCH` (PG 既に消滅) は info log + no-op
+   - `child.wait().await` で zombie を reap
+4. `Drop for NgrokGuard` は panic / 早期 return の保険:
+   - 同じく `killpg` を優先、失敗時 / 非 unix は `start_kill` にフォールバック
+   - Drop は sync なので `wait` は呼ばず、親終了後に init が reap
+5. HTTP drain → ngrok kill の順なので、public URL は serve 生存中に使え続け、
+   ngrok 側が先に落ちて 502 になる期間を作らない
 
-impl Drop for NgrokGuard {
-    fn drop(&mut self) {
-        if let Some(mut c) = self.child.take() {
-            let _ = c.start_kill();  // best-effort, async wait は Drop では呼べない
-        }
-    }
-}
-```
+### `/api/status` エンドポイント (`src/http/status.rs`)
 
-- `?` 早期 return / panic / `ctrl_c` 受信 / `launchctl` の SIGTERM すべてで子プロセスが殺されることを保証
-- graceful shutdown の流れ: HTTP サーバー drain → 明示的に `child.kill().await` で完了待ち → 最後に guard drop (二重 kill は no-op)
+認証 **不要**。**エラーでも 200 を返す** (status 自体が落ちるとトリアージ
+に使えないため、失敗は JSON フィールドで表現する):
 
-### `/api/status` エンドポイント
+- SQLite 失敗 (mutex 毒化 / `SELECT 1` エラー) → `sqlite.ok: false`
+- ngrok admin 到達不能 → `ngrok.reachable: false`, `error: "..."`
 
-認証 **不要** (運用確認用; センシティブ情報を返さない)。
+レスポンス shape は `docs/API.md` の GET /api/status セクション参照。要点:
 
-実装:
-
-1. `reqwest::get("http://localhost:4040/api/tunnels")` で ngrok admin API を叩く
-2. 最初の tunnel を抽出 (`--domain` で 1 本に固定しているので single tunnel 前提)
-3. 必要なフィールドを抽出して集約 JSON を返す
-
-レスポンス (正常時):
-
-```json
-{
-  "server": {
-    "version": "0.2.0",
-    "uptimeSeconds": 12345,
-    "sqlite": { "path": "/Users/…/tasks.db", "ok": true }
-  },
-  "ngrok": {
-    "enabled": true,
-    "reachable": true,
-    "publicUrl": "https://unedified-carrie-nondiathermanous.ngrok-free.dev",
-    "forwardingTo": "http://localhost:3333",
-    "httpRequestsTotal": 56,
-    "httpRequestsPerMinute": 49.5,
-    "connectionsTotal": 50
-  }
-}
-```
-
-- `httpRequestsPerMinute` = `metrics.http.rate1 * 60` (ngrok の `rate1` は 1 分平均の秒レート)
-- ngrok 無効時: `"ngrok": { "enabled": false }` のみ
-- `/api/tunnels` 到達失敗: `"ngrok": { "enabled": true, "reachable": false, "error": "<reqwest エラー>" }`
-- `sqlite.ok` は `SELECT 1` で判定
+- `httpRequestsPerMinute` = `metrics.http.rate1 * 60`
+- `sqlite.path` は `$HOME` 配下を `~/...` に redact (ユーザー名漏洩防止)
+- `parse_tunnel_status` は純関数化して tunnel JSON → `NgrokStatus` 変換を
+  unit test 可能にした
 
 ---
 

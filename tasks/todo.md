@@ -188,17 +188,28 @@
 
 ## T12. docs 更新
 
-- [ ] `docs/API.md`:
-  - [ ] ステータス表で `GET /api/status` を ✅ に
-  - [ ] 新規セクションで 3 状態のレスポンス例
-- [ ] `docs/SERVER_DESIGN.md` Phase 2 を「実装済み」へ、`/api/status` shape を実装と揃える
-- [ ] `README.md` + `docs/README_ja.md`:
-  - [ ] Install に `brew install ngrok` + `ngrok config add-authtoken ...` + `ngrok config check`
-  - [ ] Configure に `[ngrok].domain` の例を追加
-  - [ ] 環境変数表に `MY_TASK_SYNC_NGROK_DOMAIN` 追加 (未設定 = ngrok 無効と明記)
-  - [ ] Manage に `curl localhost:3333/api/status` で到達性確認
-- [ ] `config.example.toml` に `[ngrok]` セクション (`# domain = "..."` のコメント形で「未設定がデフォルト」と分かる形)
-- [ ] `docs/MY_OWN_INTEGRATION.md` Phase 2 セクションを更新 (ngrok URL への env 切替 + `/api/status` で到達性確認)
+- [x] `docs/API.md`:
+  - [x] ステータス表で `GET /api/status` を ✅ に更新
+  - [x] 新規セクション GET /api/status: 3 状態 (disabled / unreachable / up) のレスポンス例 + メトリクス説明 + セキュリティ注意 (URL を secret 扱い / `$HOME` redaction)
+  - [x] 共通ルール: `/api/status` も `/healthz` と並べて認証不要と明記
+- [x] `docs/SERVER_DESIGN.md`:
+  - [x] フェーズ分割表を状態列付きに更新 (Phase 1 / 2 とも実装完了)
+  - [x] Phase 2 セクション全体を「実装済み」記述に書き換え (設定 / ngrok 起動 / shutdown フロー / `/api/status` の実装要点)
+  - [x] `killpg` / `process_group(0)` / `kill_and_wait` / `$HOME` redact など実装との整合を取る
+- [x] `README.md` + `docs/README_ja.md`:
+  - [x] Install 前に `ngrok setup (optional)` セクションを追加 (`brew install ngrok` + `ngrok config add-authtoken` + `ngrok config check` + reserved domain)
+  - [x] Configure の `config.toml` サンプルにコメント形の `[ngrok]` 追加
+  - [x] 環境変数表に `MY_TASK_SYNC_NGROK_DOMAIN` を追加 + fail-fast 記述
+  - [x] Manage に ngrok log の tail 例 + `curl localhost:3333/api/status` を追加
+  - [x] Log hygiene 節: append モード採用理由 + 手動削除手順
+  - [x] Quick API check に `/api/status` の curl 例を追加
+  - [x] Known limitations: ngrok 無しは loopback 専用 / `/api/status` は認証なしで URL 自体が secret
+- [x] `config.example.toml`: コメント形で `[ngrok]` + `domain` プレースホルダ + 依存 (ngrok binary / authtoken / reserved domain) を案内
+- [x] `docs/MY_OWN_INTEGRATION.md`:
+  - [x] "Phase 2 での切り替え" を my-task-sync 側実装完了を前提に書き直し
+  - [x] Vercel env 更新前の 3 段階事前確認手順 (`/api/status` で local / 公開 URL / 認証付き `/api/tasks` を叩く)
+  - [x] reserved domain ローテート手順を追記
+  - [x] "参考: my-task-sync 側の開発状況" を更新 (残タスクは CP6 のみ)
 
 ## T13. CP6 — Vercel 上 my-own からの結合テスト
 

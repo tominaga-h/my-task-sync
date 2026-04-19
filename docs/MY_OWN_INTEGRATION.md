@@ -485,15 +485,40 @@ npm run dev
 
 ## Phase 2 での切り替え
 
-my-task-sync が ngrok サブプロセスを自動起動するようになったら、Vercel の
-環境変数を更新するだけ:
+my-task-sync 側は Phase 2 のコード実装が完了している (ngrok サブプロセス
+自動起動 + `/api/status`)。my-own 側で必要な変更は Vercel の環境変数だけ:
 
-| Vercel env | 値 |
-|------------|------|
-| `MY_TASK_SYNC_BASE_URL` | `https://<ngrok-domain>.ngrok-free.dev` |
-| `MY_TASK_SYNC_API_KEY`  | (変更なし) |
+| Vercel env              | 値                                         |
+| ----------------------- | ------------------------------------------ |
+| `MY_TASK_SYNC_BASE_URL` | `https://<your-reserved>.ngrok-free.dev`   |
+| `MY_TASK_SYNC_API_KEY`  | (変更なし)                                 |
 
-クライアントコードは変更不要。
+**事前確認** (my-task-sync 起動後、Vercel env を更新する前に):
+
+```bash
+# my-task-sync 側で config.toml に [ngrok].domain を設定 → 再起動
+# (or launchctl で再起動)
+
+# 1. ローカルでサーバー + ngrok が上がっているか
+curl -sS localhost:3333/api/status | jq '.ngrok'
+# → { "enabled": true, "reachable": true, "publicUrl": "...", ... }
+
+# 2. 公開 URL 経由で同じ status を取る (Vercel と同じ経路)
+curl -sS https://<your-reserved>.ngrok-free.dev/api/status | jq '.ngrok.reachable'
+# → true
+
+# 3. 認証付きで /api/tasks が叩けるか
+curl -H "Authorization: Bearer $MY_TASK_SYNC_API_KEY" \
+  https://<your-reserved>.ngrok-free.dev/api/tasks | jq '.tasks | length'
+```
+
+3 つ全部が成功したら、Vercel env を `https://<your-reserved>.ngrok-free.dev`
+に更新 → redeploy。クライアントコード (`lib/my-task-sync.ts`) は変更不要。
+
+**注意**: `/api/status` は認証なしで叩けるので、ngrok URL 自体を secret
+扱いにすること。漏れたら reserved domain をローテート (ngrok dashboard で
+新しい reserved domain を予約 → `[ngrok].domain` を更新 → my-task-sync
+再起動 → Vercel env 更新)。
 
 ## 実装順 (推奨)
 
@@ -509,6 +534,7 @@ my-task-sync が ngrok サブプロセスを自動起動するようになった
 
 ## 参考: my-task-sync 側の開発状況
 
-Phase 1 のエンドポイント実装は完了済み ([`API.md`](API.md) 参照)。残タスク
-は T8 (このドキュメントに書いた結合テスト) のみ。Phase 2 (ngrok 自動起動
-+ `/api/status`) はこの統合後に着手する。
+Phase 1 / Phase 2 ともエンドポイント実装は完了済み ([`API.md`](API.md)
+参照)。残タスクは **CP6: Vercel 上 my-own から公開 URL 経由で Phase 1 と
+同等の CRUD が動くことの手動確認** — これは my-own 側がこのドキュメント
+通りに実装された後に実施する。
