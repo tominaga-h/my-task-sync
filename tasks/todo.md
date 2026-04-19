@@ -100,15 +100,15 @@
 
 ## T8. ローカル my-own 結合テスト
 
-- [ ] `cargo run --release` で `:3333` bind 確認
-- [ ] my-own (`npm run dev`) を my-task-sync 向けに起動
-- [ ] CLI で `my-task add "foo"` → my-own UI 即時表示
-- [ ] my-own UI で新規作成 → `my-task ls` 表示
-- [ ] 両側で title 更新 → 後書きが残る (LWW の挙動)
-- [ ] `my-task done <n>` → my-own UI status 反映
-- [ ] my-own で project 新規指定 → `my-task projects` に出現
-- [ ] Ctrl-C graceful shutdown (進行中が 502 にならない)
-- [ ] 認証トークン誤り → 401
+- [x] `cargo run --release` で `:3333` bind 確認
+- [x] my-own (`npm run dev`) を my-task-sync 向けに起動
+- [x] CLI で `my-task add "foo"` → my-own UI 即時表示
+- [x] my-own UI で新規作成 → `my-task ls` 表示
+- [x] 両側で title 更新 → 後書きが残る (LWW の挙動)
+- [x] `my-task done <n>` → my-own UI status 反映
+- [x] my-own で project 新規指定 → `my-task projects` に出現
+- [x] Ctrl-C graceful shutdown (進行中が 502 にならない)
+- [x] 認証トークン誤り → 401
 
 → **CP5: Phase 1 PR マージ可**
 
