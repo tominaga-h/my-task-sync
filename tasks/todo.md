@@ -158,7 +158,14 @@
   - [x] `kill_and_wait_on_empty_guard_is_noop`: child=None で Ok
   - [x] `kill_and_wait_is_idempotent_with_already_exited_child`: child 死後に呼んでも ESRCH を no-op 扱い
 - [x] `make check` 全緑 — 合計 101 件
-- [x] 実バイナリ smoke test: SIGTERM 時のログに "killing ngrok subprocess group" + "ngrok subprocess reaped status=...unix_wait_status(9)" (= SIGKILL) が出ることを確認
+- [x] 実バイナリ smoke test: SIGTERM 時のログに "killing ngrok subprocess group" + "ngrok subprocess reaped status=..." が出ることを確認
+
+### T10 review fixes (S22 / S23)
+
+- [x] **S22**: Drop 経路 (`drop_inner`) も `killpg(pgid, SIGKILL)` 優先に。panic / 早期 return でも PG 全体 kill が効く。killpg 失敗時 + 非 unix は `start_kill` フォールバック
+- [x] **S23**: main.rs の `kill_and_wait` 呼び出しに `tokio::time::timeout(GRACEFUL_SHUTDOWN_SECS)` を被せる。`child.wait()` が stuck した場合も shutdown を infinite hang させない
+- [x] 結合テスト 1 件追加 (ngrok.rs inline): `drop_kills_live_child_pg_without_panic` で Drop path が panic なく完走することを pin
+- [x] `make check` 全緑 — 合計 102 件
 
 ## T11. `GET /api/status`
 

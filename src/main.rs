@@ -147,9 +147,22 @@ async fn run(cfg: ResolvedConfig) -> Result<(), Error> {
     // HTTP drain 完了 or deadline 超過の後、明示的に ngrok を kill + reap。
     // この順序 (HTTP → ngrok) なら public URL は serve 生存中に使え続け、
     // ngrok 側が勝手に落ちて Vercel 向けが 502 になる期間を作らない。
+    //
+    // S23: kill_and_wait 自体にも GRACEFUL_SHUTDOWN_SECS の timeout を
+    // 被せる。`child.wait()` が uninterruptible (D state) で stuck した
+    // 場合でも shutdown 全体を infinite hang させないため。
     if let Some(guard) = ngrok_guard.take() {
-        if let Err(e) = guard.kill_and_wait().await {
-            warn!(error = %e, "ngrok cleanup failed");
+        let cleanup = tokio::time::timeout(
+            Duration::from_secs(GRACEFUL_SHUTDOWN_SECS),
+            guard.kill_and_wait(),
+        )
+        .await;
+        match cleanup {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => warn!(error = %e, "ngrok cleanup failed"),
+            Err(_) => {
+                warn!("ngrok cleanup exceeded {GRACEFUL_SHUTDOWN_SECS}s — forcing exit anyway")
+            }
         }
     }
     Ok(())

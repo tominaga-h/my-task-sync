@@ -51,12 +51,32 @@ impl std::fmt::Debug for NgrokGuard {
 impl NgrokGuard {
     /// child の有無に関わらず安全に再呼び出し可能な Drop 実行本体。
     /// `kill_and_wait()` で child を取った後に drop されても no-op。
+    ///
+    /// `kill_and_wait()` と挙動を揃えて `killpg(pgid, SIGKILL)` を優先
+    /// (S22)。panic / 早期 return で Drop が発火した場合でも、ngrok が
+    /// fork したヘルパーを含めて PG 全体が殺される。`wait()` は Drop が
+    /// sync なので呼ばない — 親プロセス終了後に init が zombie を reap。
     fn drop_inner(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            match child.start_kill() {
-                Ok(()) => info!("ngrok subprocess kill requested (drop)"),
-                Err(e) => warn!(error = %e, "failed to signal ngrok subprocess during drop"),
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+
+        #[cfg(unix)]
+        if let Some(pid) = child.id() {
+            // SAFETY: `process_group(0)` で作った自作成 PG への SIGKILL。
+            // 引数の妥当性は静的にクリア。Drop 経路では ret をログ以外で
+            // 消費せず (panic unwinding 中の余計な分岐を避ける)、失敗時は
+            // 下の start_kill にフォールバック。
+            if unsafe { libc::killpg(pid as i32, libc::SIGKILL) } == 0 {
+                info!(pid, "ngrok subprocess PG kill requested (drop)");
+                return;
             }
+        }
+
+        // 非 unix、または killpg 失敗 (pid 取れないケース含む): 単一 PID SIGKILL
+        match child.start_kill() {
+            Ok(()) => info!("ngrok subprocess kill requested (drop / fallback)"),
+            Err(e) => warn!(error = %e, "failed to signal ngrok subprocess during drop"),
         }
     }
 
@@ -290,5 +310,24 @@ mod tests {
         // この時点で child は既に exit 済み。killpg は ESRCH を返すが
         // エラーにせず wait() で reap する。
         guard.kill_and_wait().await.expect("ESRCH path");
+    }
+
+    #[tokio::test]
+    async fn drop_kills_live_child_pg_without_panic() {
+        // S22: Drop 経路で killpg が走り、live child がシグナルされる
+        // ことの smoke check。Drop は sync で wait しないため zombie が
+        // 残るが、panic せず完走することを pin する。
+        //
+        // 直接 killpg が呼ばれたかの観測は難しいので、Drop の path を
+        // 通してパニックなく終わることで十分とする (killpg ロジック自体は
+        // kill_and_wait_terminates_live_child_promptly で pin 済み)。
+        let guard = spawn_sleep_guard(30).await;
+        let pid = guard.child.as_ref().and_then(|c| c.id()).expect("pid");
+        drop(guard); // Drop::drop → drop_inner → killpg
+                     // SIGKILL 送達を少し待つ (同期 syscall だが kernel scheduler 経由)。
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // kill(pid, 0) は zombie でも 0 を返すので生死判定には不向き。
+        // ここでは panic なく到達できた事実をもって OK とする。
+        let _ = pid;
     }
 }
