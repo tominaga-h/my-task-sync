@@ -2,8 +2,9 @@
 //!
 //! Resolution order:
 //! 1. TOML file (`--config <path>` or `$XDG_CONFIG_HOME/my-task-sync/config.toml`)
-//! 2. Environment variables (`MY_TASK_SYNC_API_KEY` / `MY_TASK_SYNC_PORT` /
-//!    `MY_TASK_DATA_FILE`) — override individual fields
+//! 2. Environment variables — override individual fields:
+//!    - `MY_TASK_SYNC_API_KEY` / `MY_TASK_SYNC_PORT` / `MY_TASK_DATA_FILE`
+//!    - `MY_TASK_SYNC_NGROK_DOMAIN` (Phase 2)
 //!
 //! SQLite path:
 //! 1. `MY_TASK_DATA_FILE` env
@@ -11,6 +12,8 @@
 //! 3. `dirs::data_dir()/my-task/tasks.db`
 //!
 //! Missing `api_key` is a `ConfigError` — never silently filled in (Fail Fast).
+//! `[ngrok].domain` が未設定 (config / env のどちらでも) の場合、ngrok
+//! サブプロセスの起動はスキップされる (ローカル開発 / CI 用途)。
 
 use std::path::{Path, PathBuf};
 
@@ -69,6 +72,7 @@ where
 pub struct ResolvedConfig {
     pub sqlite: SqliteConfig,
     pub server: ServerConfig,
+    pub ngrok: NgrokConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +86,13 @@ pub struct ServerConfig {
     pub api_key: String,
 }
 
+/// ngrok サブプロセス設定。`domain` が `None` の場合、起動時に ngrok を
+/// 立ち上げない (ローカル開発 / CI 用途)。
+#[derive(Debug, Clone, Default)]
+pub struct NgrokConfig {
+    pub domain: Option<String>,
+}
+
 // ------------------------------------------------------------------
 // File schema
 // ------------------------------------------------------------------
@@ -92,6 +103,8 @@ struct FileConfig {
     sqlite: Option<FileSqlite>,
     #[serde(default)]
     server: Option<FileServer>,
+    #[serde(default)]
+    ngrok: Option<FileNgrok>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,6 +116,11 @@ struct FileSqlite {
 struct FileServer {
     port: Option<u16>,
     api_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FileNgrok {
+    domain: Option<String>,
 }
 
 // ------------------------------------------------------------------
@@ -136,9 +154,23 @@ pub fn resolve(cli: Cli) -> Result<ResolvedConfig, Error> {
 
     let sqlite_path = resolve_sqlite_path(file.sqlite.as_ref().and_then(|s| s.path.as_deref()))?;
 
+    // ngrok ドメイン: env > file > None の順。空文字は未設定として扱う。
+    let ngrok_domain = std::env::var("MY_TASK_SYNC_NGROK_DOMAIN")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            file.ngrok
+                .as_ref()
+                .and_then(|n| n.domain.clone())
+                .filter(|s| !s.is_empty())
+        });
+
     Ok(ResolvedConfig {
         sqlite: SqliteConfig { path: sqlite_path },
         server: ServerConfig { port, api_key },
+        ngrok: NgrokConfig {
+            domain: ngrok_domain,
+        },
     })
 }
 

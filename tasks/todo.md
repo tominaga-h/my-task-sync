@@ -122,19 +122,21 @@
 
 ## T9. ngrok 設定 + 子プロセス spawn + Drop ガード
 
-- [ ] `src/config.rs` に `FileNgrok { domain: Option<String> }` / `NgrokConfig { domain: Option<String> }` を追加
-- [ ] `resolve()` で config.toml の `[ngrok].domain` を読み、環境変数 `MY_TASK_SYNC_NGROK_DOMAIN` で上書き可能に (既存 prefix 慣習に合わせる)
-- [ ] `src/ngrok.rs` (新規):
-  - [ ] `struct NgrokGuard { child: Option<tokio::process::Child> }`
-  - [ ] `impl Drop` で `child.start_kill()` (再入可能・2 回呼ばれても安全)
-  - [ ] `pub async fn spawn(domain, port) -> Result<NgrokGuard, Error>`
-  - [ ] stdout/stderr を `/tmp/my-task-sync-ngrok.{out,err}.log` にリダイレクト
-  - [ ] ngrok バイナリ不在 (`io::ErrorKind::NotFound`) を `Error::Config` にマップ
-  - [ ] `Child::id()` を tracing::info! でログ
-- [ ] `src/lib.rs` に `pub mod ngrok;` 追加
-- [ ] `src/main.rs::run()` で bind 後に spawn し、guard を serve のスコープ内で保持。`domain` 未設定時はスキップ (ログに "ngrok disabled" 1 行)
-- [ ] 単体テスト: ngrok 不在時のエラーメッセージに "ngrok" が含まれる / Drop 2 回で panic しない / domain 未設定 → `NgrokConfig { domain: None }` / env 上書きが効く
-- [ ] 手動確認: `[ngrok].domain` 設定で起動 → ngrok PID がログ出力 / `curl https://<domain>/healthz` → 200 / Ctrl-C で ngrok も消える
+- [x] `src/config.rs` に `FileNgrok { domain: Option<String> }` / `NgrokConfig { domain: Option<String> }` を追加
+- [x] `resolve()` で config.toml の `[ngrok].domain` を読み、環境変数 `MY_TASK_SYNC_NGROK_DOMAIN` で上書き可能に (空文字は未設定扱い)
+- [x] `src/ngrok.rs` (新規):
+  - [x] `struct NgrokGuard { child: Option<tokio::process::Child> }` + 自前 `Debug` impl (child の内部状態を panic メッセージに出さない)
+  - [x] `impl Drop` で `drop_inner()` → `child.start_kill()` (再入可能・`take()` で 2 回目は no-op)
+  - [x] `pub async fn spawn(domain, port) -> Result<NgrokGuard, Error>` + テスト用の `spawn_internal`
+  - [x] stdout/stderr を `/tmp/my-task-sync-ngrok.{out,err}.log` に追記
+  - [x] ngrok バイナリ不在 (`io::ErrorKind::NotFound`) を `Error::Config` にマップ (brew/authtoken 手順案内付き)
+  - [x] `Child::id()` を tracing::info! でログ
+- [x] `src/lib.rs` に `pub mod ngrok;` 追加
+- [x] `src/main.rs::run()` で bind 後に spawn し、guard を serve のスコープ内で保持。`domain` 未設定時はスキップ ("ngrok disabled ([ngrok].domain not set)")
+- [x] 結合テスト (config_test.rs) 4 件追加: 未設定 → None / TOML から読める / env が TOML を上書き / 空文字は未設定扱い
+- [x] `src/ngrok.rs` 単体テスト 2 件: ngrok 不在時のエラーメッセージに "ngrok" + 案内文言 / Drop 2 回 no-op
+- [x] `make check` 全緑 — 合計 98 件
+- [x] 実バイナリ smoke test: domain 未設定で "ngrok disabled" / domain 設定で "ngrok subprocess started pid=<N>" ログ / SIGTERM → "ngrok subprocess kill requested (drop)" 起動
 
 ## T10. graceful shutdown への統合
 

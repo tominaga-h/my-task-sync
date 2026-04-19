@@ -17,6 +17,7 @@ use tracing_subscriber::EnvFilter;
 use my_task_sync::config::{self, ResolvedConfig};
 use my_task_sync::error::Error;
 use my_task_sync::http;
+use my_task_sync::ngrok;
 use my_task_sync::sqlite;
 
 /// シャットダウン信号を受けてから in-flight リクエストの drain を待つ
@@ -106,6 +107,17 @@ async fn run(cfg: ResolvedConfig) -> Result<(), Error> {
     let addr = SocketAddr::from(([127, 0, 0, 1], cfg.server.port));
     let listener = TcpListener::bind(addr).await?;
     info!(%addr, "listening");
+
+    // ngrok subprocess を bind 成功後に spawn (順序逆だと転送先が無い)。
+    // 未設定なら skip。`_ngrok_guard` は run() スコープが終わるまで保持
+    // され、Drop で child に SIGKILL が送られる (T10 で明示 kill に昇格)。
+    let _ngrok_guard = match cfg.ngrok.domain.as_deref() {
+        Some(domain) => Some(ngrok::spawn(domain, cfg.server.port).await?),
+        None => {
+            info!("ngrok disabled ([ngrok].domain not set)");
+            None
+        }
+    };
 
     // シャットダウン信号 → serve の drain トリガを oneshot で繋ぎ、
     // さらに GRACEFUL_SHUTDOWN_SECS の deadline を被せる。

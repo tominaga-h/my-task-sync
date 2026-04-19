@@ -211,6 +211,124 @@ port = 3333
     );
 }
 
+// ---------- [ngrok].domain ----------
+
+#[test]
+fn ngrok_domain_defaults_to_none() {
+    // [ngrok] セクション無し + env 未設定 → None (ngrok 起動しない)
+    let tmp = tempfile::tempdir().unwrap();
+    let path = write_config(
+        tmp.path(),
+        r#"
+[server]
+api_key = "k"
+"#,
+    );
+    with_env(
+        &[
+            ("MY_TASK_SYNC_API_KEY", None),
+            ("MY_TASK_SYNC_PORT", None),
+            ("MY_TASK_SYNC_NGROK_DOMAIN", None),
+            ("MY_TASK_DATA_FILE", None),
+        ],
+        || {
+            let resolved = config::resolve(cli_with(Some(path))).unwrap();
+            assert!(resolved.ngrok.domain.is_none());
+        },
+    );
+}
+
+#[test]
+fn ngrok_domain_from_toml_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = write_config(
+        tmp.path(),
+        r#"
+[server]
+api_key = "k"
+
+[ngrok]
+domain = "from-file.ngrok-free.dev"
+"#,
+    );
+    with_env(
+        &[
+            ("MY_TASK_SYNC_API_KEY", None),
+            ("MY_TASK_SYNC_PORT", None),
+            ("MY_TASK_SYNC_NGROK_DOMAIN", None),
+            ("MY_TASK_DATA_FILE", None),
+        ],
+        || {
+            let resolved = config::resolve(cli_with(Some(path))).unwrap();
+            assert_eq!(
+                resolved.ngrok.domain.as_deref(),
+                Some("from-file.ngrok-free.dev")
+            );
+        },
+    );
+}
+
+#[test]
+fn ngrok_domain_env_overrides_toml() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = write_config(
+        tmp.path(),
+        r#"
+[server]
+api_key = "k"
+
+[ngrok]
+domain = "file-value.ngrok-free.dev"
+"#,
+    );
+    with_env(
+        &[
+            ("MY_TASK_SYNC_API_KEY", None),
+            ("MY_TASK_SYNC_PORT", None),
+            (
+                "MY_TASK_SYNC_NGROK_DOMAIN",
+                Some("env-value.ngrok-free.dev"),
+            ),
+            ("MY_TASK_DATA_FILE", None),
+        ],
+        || {
+            let resolved = config::resolve(cli_with(Some(path))).unwrap();
+            assert_eq!(
+                resolved.ngrok.domain.as_deref(),
+                Some("env-value.ngrok-free.dev")
+            );
+        },
+    );
+}
+
+#[test]
+fn ngrok_domain_empty_string_treated_as_unset() {
+    // env が空文字 or TOML が空文字 → どちらも None 扱い
+    let tmp = tempfile::tempdir().unwrap();
+    let path = write_config(
+        tmp.path(),
+        r#"
+[server]
+api_key = "k"
+
+[ngrok]
+domain = ""
+"#,
+    );
+    with_env(
+        &[
+            ("MY_TASK_SYNC_API_KEY", None),
+            ("MY_TASK_SYNC_PORT", None),
+            ("MY_TASK_SYNC_NGROK_DOMAIN", Some("")),
+            ("MY_TASK_DATA_FILE", None),
+        ],
+        || {
+            let resolved = config::resolve(cli_with(Some(path))).unwrap();
+            assert!(resolved.ngrok.domain.is_none());
+        },
+    );
+}
+
 #[test]
 fn invalid_port_env_is_rejected() {
     // Given: MY_TASK_SYNC_PORT に数値以外
