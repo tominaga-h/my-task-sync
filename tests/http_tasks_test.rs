@@ -59,7 +59,7 @@ fn authed_patch(uri: &str, body: Value) -> Request<Body> {
 }
 
 fn app_with(conn: Connection) -> axum::Router {
-    router(AppState::new(conn, API_KEY.into()))
+    router(AppState::new(conn, API_KEY.into(), ":memory:".into(), None))
 }
 
 /// POST 用の最小 body。テストで差分を付けたい箇所だけ上書きする。

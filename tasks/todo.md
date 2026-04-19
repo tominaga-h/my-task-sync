@@ -169,20 +169,22 @@
 
 ## T11. `GET /api/status`
 
-- [ ] `src/http/status.rs` (新規) に `get_status` ハンドラ
-- [ ] server セクション: version / uptime_seconds / sqlite (path + ok)
-  - [ ] `AppState` に `started_at: Instant` を追加 (uptime 計算用)
-  - [ ] SQLite health check は `SELECT 1` で ok 判定
-- [ ] ngrok セクション: 3 状態 (disabled / unreachable / up)
-  - [ ] `reqwest::get("http://localhost:4040/api/tunnels")` を 2s timeout で呼ぶ
-  - [ ] `publicUrl` / `forwardingTo` / `httpRequestsTotal` / `httpRequestsPerMinute` (`rate1 * 60`) / `connectionsTotal` を抽出
-- [ ] `src/http/mod.rs`: `/api/status` を **認証 middleware の外側** に配置 (`nest("/api", ...)` との優先度に注意)
-- [ ] DTO (`StatusResponse` 等) を `src/model.rs` or `src/http/status.rs` に定義
-- [ ] 単体テスト 3 ケース (mock ngrok admin server を立てる or reqwest::Client を trait 差し替え):
-  - [ ] ngrok disabled → `{ "enabled": false }`
-  - [ ] ngrok unreachable → `{ "enabled": true, "reachable": false, "error": "..." }`
-  - [ ] ngrok up → `publicUrl` など全フィールド含む
-- [ ] 実バイナリ smoke test: 3 状態を curl で確認
+- [x] `src/http/status.rs` (新規) に `get_status` ハンドラ + DTO (`StatusResponse` / `ServerStatus` / `SqliteStatus` / `NgrokStatus`) を定義
+- [x] server セクション: version (`env!("CARGO_PKG_VERSION")`) / uptime_seconds / sqlite (path + ok)
+  - [x] `AppState` に `started_at: Instant` / `sqlite_path: Arc<String>` / `ngrok_domain: Option<Arc<String>>` を追加
+  - [x] SQLite health は `SELECT 1` で ok 判定、mutex 毒化 / SQL 失敗は `false` に寄せて 200 を保つ
+- [x] ngrok セクション: 3 状態 (disabled / unreachable / up) をフラット JSON で表現 (`skip_serializing_if = Option::is_none`)
+  - [x] `fetch_ngrok_tunnels()` で `reqwest::Client::builder().timeout(2s)` を使い `http://localhost:4040/api/tunnels` を叩く
+  - [x] `parse_tunnel_status()` 純関数で `publicUrl` / `forwardingTo` / `httpRequestsTotal` / `httpRequestsPerMinute` (`rate1 * 60`) / `connectionsTotal` を抽出
+- [x] `src/http/mod.rs` の router で `/api/status` を **認証 middleware の外側** に配置 (exact match `/api/status` が `.nest("/api", ...)` より優先)
+- [x] `AppState::new` シグネチャ変更に伴い tests/http_tasks_test.rs / tests/http_projects_test.rs / inline test helper を合わせて更新
+- [x] 単体テスト 5 件 (status.rs inline): parse_tunnel_status の 4 shape (full / empty array / missing metrics / top-level garbage) + NgrokStatus serialize の disabled/unreachable shape
+- [x] 結合テスト 4 件 (tests/http_status_test.rs 新規): 認証なしで 200 / server セクション / ngrok disabled / ngrok unreachable
+- [x] `make check` 全緑 — 合計 112 件
+- [x] 実バイナリ smoke test で 3 状態すべて確認:
+  - [x] disabled: `--config` で空設定 → `{ "enabled": false }` のみ
+  - [x] up: ユーザー実 config + 実 ngrok → publicUrl / forwardingTo / metrics 全填
+  - [x] unreachable: bogus domain で ngrok admin が未起動 → reachable:false + error メッセージ
 
 ## T12. docs 更新
 

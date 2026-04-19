@@ -1,13 +1,16 @@
 //! HTTP layer — axum router, shared state, ミドルウェア。
 //!
-//! Phase 1 のルート構成:
-//!   * `/healthz` — 認証なし (運用者が token 無しで死活確認できるように)
-//!   * `/api/*`   — Bearer 認証 middleware 必須 (T2)。中身のハンドラは T3〜T7
+//! Phase 1 / 2 のルート構成:
+//!   * `/healthz`      — 認証なし (運用者が token 無しで死活確認できるように)
+//!   * `/api/status`   — 認証なし (T11 / Phase 2)。public URL 出る前に叩きたい
+//!     ので Bearer を要求しない
+//!   * `/api/*` (他)    — Bearer 認証 middleware 必須 (T2)
 //!
 //! `AppState` は `Router::with_state` で全ハンドラ / middleware に共有され、
 //! `State<AppState>` で抽出できる。
 
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use axum::http::StatusCode;
 use axum::routing::get;
@@ -17,6 +20,7 @@ use tower_http::trace::TraceLayer;
 
 pub mod auth;
 pub mod projects;
+pub mod status;
 pub mod tasks;
 
 /// Shared state handed to every handler via `axum::extract::State`.
@@ -24,18 +28,34 @@ pub mod tasks;
 /// `rusqlite::Connection` は `!Sync` なので `Mutex` 必須。ハンドラは
 /// `.lock()` を await をまたがずに短時間だけ保持する運用 (std::sync::Mutex
 /// で OK)。`api_key` は `Arc<String>` で包み、`AppState::clone()` を安価に
-/// 保つ。
+/// 保つ。T11 で `started_at` / `sqlite_path` / `ngrok_domain` を追加 —
+/// `/api/status` のレスポンス組み立てに使う。
 #[derive(Clone)]
 pub struct AppState {
     pub conn: Arc<Mutex<Connection>>,
     pub api_key: Arc<String>,
+    /// サーバー起動時刻。uptime 算出用。
+    pub started_at: Instant,
+    /// 開いている SQLite のパス。`/api/status` の sqlite.path 表示用。
+    pub sqlite_path: Arc<String>,
+    /// ngrok `domain` 設定 (config.toml or env から resolve した結果)。
+    /// `None` なら ngrok 無効 → `/api/status` は `{ "enabled": false }` を返す。
+    pub ngrok_domain: Option<Arc<String>>,
 }
 
 impl AppState {
-    pub fn new(conn: Connection, api_key: String) -> Self {
+    pub fn new(
+        conn: Connection,
+        api_key: String,
+        sqlite_path: String,
+        ngrok_domain: Option<String>,
+    ) -> Self {
         Self {
             conn: Arc::new(Mutex::new(conn)),
             api_key: Arc::new(api_key),
+            started_at: Instant::now(),
+            sqlite_path: Arc::new(sqlite_path),
+            ngrok_domain: ngrok_domain.map(Arc::new),
         }
     }
 }
@@ -63,6 +83,10 @@ pub fn router(state: AppState) -> Router {
 
     Router::new()
         .route("/healthz", get(healthz))
+        // `/api/status` は認証 middleware の **外側** に置く。
+        // axum のルート優先順位で exact-match (`/api/status`) が
+        // `.nest("/api", ...)` より勝つので、認証なしで到達できる。
+        .route("/api/status", get(status::get_status))
         .nest("/api", api)
         // `TraceLayer` はすべてのリクエストに DEBUG 以上で request/response
         // のログを出す。5xx 時の tracing::error と組み合わせて "どのパス・
@@ -89,7 +113,12 @@ mod tests {
     const TEST_API_KEY: &str = "test-secret";
 
     fn test_state() -> AppState {
-        AppState::new(Connection::open_in_memory().unwrap(), TEST_API_KEY.into())
+        AppState::new(
+            Connection::open_in_memory().unwrap(),
+            TEST_API_KEY.into(),
+            ":memory:".into(),
+            None,
+        )
     }
 
     async fn oneshot(app: Router, req: Request<Body>) -> axum::response::Response {

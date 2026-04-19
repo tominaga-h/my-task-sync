@@ -35,7 +35,7 @@ fn authed_get(uri: &str) -> Request<Body> {
 }
 
 fn app_with(conn: Connection) -> axum::Router {
-    router(AppState::new(conn, API_KEY.into()))
+    router(AppState::new(conn, API_KEY.into(), ":memory:".into(), None))
 }
 
 // ---------- tests ----------
