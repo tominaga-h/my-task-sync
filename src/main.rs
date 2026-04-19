@@ -109,13 +109,10 @@ async fn run(cfg: ResolvedConfig) -> Result<(), Error> {
     info!(%addr, "listening");
 
     // ngrok subprocess を bind 成功後に spawn (順序逆だと転送先が無い)。
-    // 未設定なら skip。
-    //
-    // 変数名は `_ngrok_guard` だが **Drop が主目的** で "未使用" ではない
-    // (Rust の慣習では underscore prefix は compiler 警告抑止が趣旨)。
-    // run() のスコープが終わるまでバインドを保持 → Drop で child に
-    // SIGKILL が送られる。T10 で明示 `kill_and_wait()` + killpg に昇格予定。
-    let _ngrok_guard = match cfg.ngrok.domain.as_deref() {
+    // 未設定なら skip。guard は run() スコープ終了まで保持。通常経路では
+    // serve 終了後に `kill_and_wait()` で明示 reap する (T10)。Drop は
+    // panic / 早期 return (bind 失敗など) の保険。
+    let mut ngrok_guard = match cfg.ngrok.domain.as_deref() {
         Some(domain) => Some(ngrok::spawn(domain, cfg.server.port).await?),
         None => {
             info!("ngrok disabled ([ngrok].domain not set)");
@@ -144,6 +141,15 @@ async fn run(cfg: ResolvedConfig) -> Result<(), Error> {
             warn!(
                 "graceful shutdown exceeded {GRACEFUL_SHUTDOWN_SECS}s — forcing exit"
             );
+        }
+    }
+
+    // HTTP drain 完了 or deadline 超過の後、明示的に ngrok を kill + reap。
+    // この順序 (HTTP → ngrok) なら public URL は serve 生存中に使え続け、
+    // ngrok 側が勝手に落ちて Vercel 向けが 502 になる期間を作らない。
+    if let Some(guard) = ngrok_guard.take() {
+        if let Err(e) = guard.kill_and_wait().await {
+            warn!(error = %e, "ngrok cleanup failed");
         }
     }
     Ok(())

@@ -59,6 +59,59 @@ impl NgrokGuard {
             }
         }
     }
+
+    /// graceful shutdown 経路から呼ぶ明示 kill。
+    ///
+    /// 1. `killpg(pgid, SIGKILL)` で PG 全体を SIGKILL (ngrok が fork した
+    ///    ヘルパーも含めて一掃)。`ESRCH` (PG が既に消滅) は no-op 扱い。
+    /// 2. `child.wait()` で zombie を reap してリソースを解放。
+    ///
+    /// `self` を consume するので二重呼び出し不可 (型で防ぐ)。戻ってくる
+    /// ときには ngrok プロセスの終了ステータスをログ出力済み。
+    pub async fn kill_and_wait(mut self) -> Result<(), Error> {
+        let Some(mut child) = self.child.take() else {
+            // kill_and_wait が child = None の guard に対して呼ばれる正当
+            // な経路は無いが (spawn 直後のみ Some)、防御的に no-op。
+            return Ok(());
+        };
+
+        let pid = child.id();
+        info!(pid, "killing ngrok subprocess group");
+
+        // PG 全体に SIGKILL。`process_group(0)` を spawn 時に設定してある
+        // ので pid == pgid。unix 以外は tokio::Child::start_kill に退避。
+        #[cfg(unix)]
+        if let Some(pid) = pid {
+            let pgid = pid as i32;
+            // SAFETY: killpg は signum, pgid を取る単純な syscall。引数の
+            // 妥当性チェック (pgid > 0, SIGKILL が valid signal) は全て
+            // 静的にクリアしている。副作用はプロセス終了のみ。
+            let ret = unsafe { libc::killpg(pgid, libc::SIGKILL) };
+            if ret == -1 {
+                let err = io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::ESRCH) {
+                    // 既に exit してる (authtoken 不正で早期死など) → OK
+                    info!(pgid, "ngrok process group already gone");
+                } else {
+                    warn!(error = %err, pgid, "killpg failed; falling back to start_kill");
+                    let _ = child.start_kill();
+                }
+            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            // non-unix (Windows 等): PG 概念がないので単一 PID kill に退避。
+            let _ = child.start_kill();
+        }
+
+        // wait で zombie を reap。killpg 済みの child はすぐ返るはず。
+        match child.wait().await {
+            Ok(status) => info!(?status, "ngrok subprocess reaped"),
+            Err(e) => warn!(error = %e, "waiting for ngrok subprocess failed"),
+        }
+        Ok(())
+    }
 }
 
 impl Drop for NgrokGuard {
@@ -189,5 +242,53 @@ mod tests {
         guard.drop_inner(); // 1 回目
         guard.drop_inner(); // 2 回目 — no-op でなければここで panic する
                             // Drop trait も暗黙に呼ばれるので、スコープ終わりでさらにもう 1 回。
+    }
+
+    // ---- kill_and_wait tests (T10) ----
+
+    /// テスト用: `sleep N` を長寿命 child として立てる。ngrok を実際に
+    /// 動かすには authtoken / domain が要るので、`sleep` で代用する。
+    /// spawn 本体と同じく `process_group(0)` を設定して PG kill の挙動を
+    /// 再現可能にする。
+    async fn spawn_sleep_guard(seconds: u64) -> NgrokGuard {
+        use tokio::process::Command;
+        let mut cmd = Command::new("sleep");
+        cmd.arg(seconds.to_string());
+        #[cfg(unix)]
+        cmd.process_group(0);
+        let child = cmd.spawn().expect("spawn sleep");
+        NgrokGuard { child: Some(child) }
+    }
+
+    #[tokio::test]
+    async fn kill_and_wait_terminates_live_child_promptly() {
+        // sleep 30 が立ち上がり、kill_and_wait で即座に終了することを確認。
+        // 3s のタイムアウトを被せて "hang しないこと" を pin する。
+        let guard = spawn_sleep_guard(30).await;
+        tokio::time::timeout(std::time::Duration::from_secs(3), guard.kill_and_wait())
+            .await
+            .expect("kill_and_wait must complete within 3s")
+            .expect("kill_and_wait must succeed");
+    }
+
+    #[tokio::test]
+    async fn kill_and_wait_on_empty_guard_is_noop() {
+        // child = None (kill_and_wait が 2 回目相当) でも panic / error
+        // なく返ること。spawn 失敗 → 何らかの経路で None 化した guard も
+        // 同じ扱い。
+        let guard = NgrokGuard { child: None };
+        guard.kill_and_wait().await.expect("noop path");
+    }
+
+    #[tokio::test]
+    async fn kill_and_wait_is_idempotent_with_already_exited_child() {
+        // `sleep 0.01` で極短命な child を立て、完全に exit してから
+        // kill_and_wait を呼んでも ESRCH を正しく no-op 扱いできること。
+        let guard = spawn_sleep_guard(0).await;
+        // child が死ぬのを待つ
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // この時点で child は既に exit 済み。killpg は ESRCH を返すが
+        // エラーにせず wait() で reap する。
+        guard.kill_and_wait().await.expect("ESRCH path");
     }
 }

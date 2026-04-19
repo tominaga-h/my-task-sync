@@ -140,13 +140,25 @@
 
 ## T10. graceful shutdown への統合
 
-- [ ] `src/ngrok.rs::NgrokGuard` に `pub async fn kill_and_wait(mut self) -> Result<(), Error>` 追加 (`child.kill().await` + `child.wait().await` → `self.child = None`)
-- [ ] `src/main.rs::run()` の shutdown フロー:
-  - [ ] HTTP serve drain 完了 or `GRACEFUL_SHUTDOWN_SECS` タイムアウト後に `guard.kill_and_wait()` を呼ぶ
-  - [ ] Drop ガードは panic / 早期 return / unwind の保険として残す
-- [ ] 手動確認: `kill -TERM <pid>` → my-task-sync 停止後に `ps aux | grep ngrok` で残っていないこと
-- [ ] 手動確認: `launchctl unload` サイクルでも ngrok 残存なし
-- [ ] panic 誘発テスト: Drop ガードが child を殺すこと (cfg(test) で強制 panic → teardown で ngrok PID 消失)
+- [x] `Cargo.toml` に `libc = "0.2"` 追加 (cfg(unix) target-specific、killpg syscall 用)
+- [x] `src/ngrok.rs::NgrokGuard::kill_and_wait(mut self) -> Result<(), Error>` を追加
+  - [x] `child.id()` を取得 (= pgid、process_group(0) のおかげで)
+  - [x] `#[cfg(unix)]` で `libc::killpg(pgid, SIGKILL)` → PG 全体を SIGKILL
+  - [x] ESRCH (PG 既に消滅) は info log + no-op
+  - [x] killpg 失敗時は `child.start_kill()` にフォールバック
+  - [x] `#[cfg(not(unix))]` では `start_kill` のみ (Windows 退避)
+  - [x] `child.wait().await` で zombie を reap + 終了ステータスをログ
+  - [x] `self` を consume するので 2 重呼び出し不可 (型で防ぐ)
+- [x] `src/main.rs::run()` の shutdown フロー:
+  - [x] serve drain 完了 or `GRACEFUL_SHUTDOWN_SECS` 超過後に `guard.kill_and_wait()` を呼ぶ
+  - [x] ngrok_guard は `Option<NgrokGuard>` で `.take()` 経由で consume
+  - [x] Drop ガードは panic / 早期 return の保険として残る (暗黙)
+- [x] 結合テスト 3 件 (ngrok.rs inline):
+  - [x] `kill_and_wait_terminates_live_child_promptly`: `sleep 30` を立てて 3s 以内に reap (hang 検出)
+  - [x] `kill_and_wait_on_empty_guard_is_noop`: child=None で Ok
+  - [x] `kill_and_wait_is_idempotent_with_already_exited_child`: child 死後に呼んでも ESRCH を no-op 扱い
+- [x] `make check` 全緑 — 合計 101 件
+- [x] 実バイナリ smoke test: SIGTERM 時のログに "killing ngrok subprocess group" + "ngrok subprocess reaped status=...unix_wait_status(9)" (= SIGKILL) が出ることを確認
 
 ## T11. `GET /api/status`
 

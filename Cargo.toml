@@ -29,6 +29,11 @@ axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace"] }
 
+[target.'cfg(unix)'.dependencies]
+# killpg(2) for process-group-wide SIGKILL in ngrok shutdown (T10).
+# tokio の Child は単一 PID 宛の kill しか持たないため。unix 限定。
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 
