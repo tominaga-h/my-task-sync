@@ -99,7 +99,7 @@ pub async fn get_status(State(state): State<AppState>) -> Json<StatusResponse> {
 
     let sqlite_ok = check_sqlite(&state);
     let sqlite = SqliteStatus {
-        path: state.sqlite_path.as_str().to_string(),
+        path: redact_home(state.sqlite_path.as_str()),
         ok: sqlite_ok,
     };
 
@@ -127,6 +127,28 @@ pub async fn get_status(State(state): State<AppState>) -> Json<StatusResponse> {
         },
         ngrok,
     })
+}
+
+/// `$HOME` 配下のパスを `~/...` に書き換える (S24)。
+///
+/// `/api/status` は認証なしで叩けるため、ngrok URL 経由で第三者が
+/// レスポンスを見る可能性がある。macOS ユーザー名 (`/Users/<name>/...`)
+/// を素で返さないよう、HOME と prefix match した部分を `~` に置換する。
+///
+/// - HOME 未設定 / 空文字: 変換しない (元のパスをそのまま返す)
+/// - HOME 配下でないパス: 変換しない
+///
+/// env 読み取りを含むので、純ロジックのテストは `redact_home_with` を使う。
+fn redact_home(path: &str) -> String {
+    let home = std::env::var("HOME").ok();
+    redact_home_with(path, home.as_deref())
+}
+
+fn redact_home_with(path: &str, home: Option<&str>) -> String {
+    match home {
+        Some(h) if !h.is_empty() && path.starts_with(h) => format!("~{}", &path[h.len()..]),
+        _ => path.to_string(),
+    }
 }
 
 /// `SELECT 1` で SQLite が読めるか確認。mutex 毒化 / SQL 失敗は `false` に
@@ -307,6 +329,40 @@ mod tests {
         };
         let v = serde_json::to_value(&s).unwrap();
         assert_eq!(v, json!({ "enabled": false }));
+    }
+
+    // ---- redact_home (S24) ----
+
+    #[test]
+    fn redact_home_replaces_home_prefix_with_tilde() {
+        assert_eq!(
+            redact_home_with(
+                "/Users/alice/Library/Application Support/my-task/tasks.db",
+                Some("/Users/alice"),
+            ),
+            "~/Library/Application Support/my-task/tasks.db"
+        );
+    }
+
+    #[test]
+    fn redact_home_keeps_path_unchanged_when_outside_home() {
+        assert_eq!(
+            redact_home_with("/tmp/status-test.db", Some("/Users/alice")),
+            "/tmp/status-test.db"
+        );
+    }
+
+    #[test]
+    fn redact_home_noop_when_home_is_none_or_empty() {
+        let path = "/Users/alice/foo";
+        assert_eq!(redact_home_with(path, None), path);
+        assert_eq!(redact_home_with(path, Some("")), path);
+    }
+
+    #[test]
+    fn redact_home_handles_exact_home_path() {
+        // path が HOME と完全一致するケース (通常ありえないが防御的に)
+        assert_eq!(redact_home_with("/Users/alice", Some("/Users/alice")), "~");
     }
 
     #[test]

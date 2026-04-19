@@ -75,9 +75,32 @@ async fn status_server_section_contains_version_uptime_sqlite() {
         "uptimeSeconds not a u64"
     );
 
-    // SQLite ヘルス — make_my_task_db が開けたので ok=true、path は渡した値
+    // SQLite ヘルス — make_my_task_db が開けたので ok=true。
+    // path は /tmp/... で渡しており HOME 配下でないため redact 対象外 →
+    // 元の値がそのまま返る (S24 の redact 対象は HOME 配下のみ)。
     assert_eq!(server["sqlite"]["path"], "/tmp/status-test.db");
     assert_eq!(server["sqlite"]["ok"], true);
+}
+
+#[tokio::test]
+async fn status_sqlite_path_redacts_home_dir() {
+    // S24: HOME 配下の SQLite path はレスポンスで `~/...` に置換される
+    // ことを pin。HOME は必ず set されている環境前提 (unix)。
+    let home = std::env::var("HOME").expect("HOME must be set for this test");
+    let conn = make_my_task_db();
+    let fake_path = format!("{home}/Library/Application Support/my-task/tasks.db");
+    let app = router(AppState::new(conn, API_KEY.into(), fake_path, None));
+
+    let body = body_json(app.oneshot(get_status_request()).await.unwrap()).await;
+    let path = body["server"]["sqlite"]["path"].as_str().unwrap();
+    assert!(
+        path.starts_with("~/"),
+        "expected ~/... redacted path, got: {path}"
+    );
+    assert!(
+        !path.contains(&home),
+        "path must not leak the raw HOME value, got: {path}"
+    );
 }
 
 // ---------- ngrok section ----------
