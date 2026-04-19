@@ -122,8 +122,8 @@
 
 ## T9. ngrok 設定 + 子プロセス spawn + Drop ガード
 
-- [ ] `src/config.rs` に `FileNgrok { domain: Option<String> }` / `NgrokConfig` 追加
-- [ ] 環境変数 `MY_TASK_SYNC_NGROK_DOMAIN` を `resolve()` に追加
+- [ ] `src/config.rs` に `NgrokConfig { domain: Option<String> }` 追加 (config.toml には書かない、**env `NGROK_DOMAIN` 限定**)
+- [ ] `resolve()` で `NGROK_DOMAIN` を読む (空文字は未設定扱い)
 - [ ] `src/ngrok.rs` (新規):
   - [ ] `struct NgrokGuard { child: Option<tokio::process::Child> }`
   - [ ] `impl Drop` で `child.start_kill()` (再入可能・2 回呼ばれても安全)
@@ -132,10 +132,9 @@
   - [ ] ngrok バイナリ不在 (`io::ErrorKind::NotFound`) を `Error::Config` にマップ
   - [ ] `Child::id()` を tracing::info! でログ
 - [ ] `src/lib.rs` に `pub mod ngrok;` 追加
-- [ ] `src/main.rs::run()` で bind 後に spawn し、guard を serve のスコープ内で保持
-- [ ] `config.example.toml` に `[ngrok]` セクション (コメント内プレースホルダ) 追加
-- [ ] 単体テスト: ngrok 不在時のエラーメッセージに "ngrok" が含まれる / Drop 2 回で panic しない
-- [ ] 手動確認: `[ngrok].domain` 設定で起動 → ngrok PID がログ出力 / `curl https://<domain>/healthz` → 200 / Ctrl-C で ngrok も消える
+- [ ] `src/main.rs::run()` で bind 後に spawn し、guard を serve のスコープ内で保持。`NGROK_DOMAIN` 未設定時はスキップ (ログに "ngrok disabled" 1 行)
+- [ ] 単体テスト: ngrok 不在時のエラーメッセージに "ngrok" が含まれる / Drop 2 回で panic しない / `NGROK_DOMAIN` 未設定 → `NgrokConfig { domain: None }`
+- [ ] 手動確認: `NGROK_DOMAIN=<domain>` 設定で起動 → ngrok PID がログ出力 / `curl https://<domain>/healthz` → 200 / Ctrl-C で ngrok も消える
 
 ## T10. graceful shutdown への統合
 
@@ -172,9 +171,10 @@
 - [ ] `docs/SERVER_DESIGN.md` Phase 2 を「実装済み」へ、`/api/status` shape を実装と揃える
 - [ ] `README.md` + `docs/README_ja.md`:
   - [ ] Install に `brew install ngrok` + `ngrok config add-authtoken ...` + `ngrok config check`
-  - [ ] Configure に `[ngrok].domain` の例
+  - [ ] 環境変数表に `NGROK_DOMAIN` 追加 (未設定 = ngrok 無効と明記)
+  - [ ] `com.my-task-sync.plist` の `EnvironmentVariables` サンプルに `NGROK_DOMAIN` を載せる
   - [ ] Manage に `curl localhost:3333/api/status` で到達性確認
-- [ ] `config.example.toml` に `[ngrok]` セクション (コメント内のプレースホルダ)
+- [ ] `config.example.toml` は触らない (ngrok 設定は env 限定)
 - [ ] `docs/MY_OWN_INTEGRATION.md` Phase 2 セクションを更新 (ngrok URL への env 切替 + `/api/status` で到達性確認)
 
 ## T13. CP6 — Vercel 上 my-own からの結合テスト

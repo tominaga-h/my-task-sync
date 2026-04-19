@@ -345,11 +345,12 @@ ngrok サブプロセスが自動で立ち上がり、HTTP サーバーの寿命
 **変更**:
 - `Cargo.toml`: 依存追加なし (tokio::process は既に tokio full で有効)
 - `src/config.rs`:
-  - `FileConfig` に `ngrok: Option<FileNgrok>` 追加
-  - `FileNgrok { domain: Option<String> }`
   - `ResolvedConfig` に `ngrok: NgrokConfig` 追加
   - `NgrokConfig { domain: Option<String> }` (None なら spawn しない)
-  - 環境変数 `MY_TASK_SYNC_NGROK_DOMAIN` の上書きを `resolve()` に追加
+  - **env 限定**: `resolve()` で `NGROK_DOMAIN` を読み込む。未設定 or 空文字なら None
+  - config.toml 側には `[ngrok]` セクションを **作らない** (ドメインは
+    deployment ごとの固定値なので env で管理する方が適切 — config file に
+    書くとうっかり public repo にコミットするリスクあり)
 - `src/ngrok.rs` (新規):
   - `struct NgrokGuard { child: Option<tokio::process::Child> }`
   - `impl Drop for NgrokGuard { fn drop(&mut self) { let _ = child.start_kill(); } }`
@@ -369,18 +370,18 @@ ngrok サブプロセスが自動で立ち上がり、HTTP サーバーの寿命
   spawn のエラーパスを集中テスト)
 
 **受け入れ条件**:
-- `[ngrok].domain` 未設定で `cargo run` → サーバー起動、ngrok 起動なし (ログに `ngrok disabled (no domain configured)` 等)
-- `[ngrok].domain = "x.ngrok-free.dev"` で `cargo run` → ngrok バイナリが PATH にあれば child 起動、PID がログ出力
+- `NGROK_DOMAIN` 未設定で `cargo run` → サーバー起動、ngrok 起動なし (ログに `ngrok disabled (NGROK_DOMAIN not set)` 等)
+- `NGROK_DOMAIN=x.ngrok-free.dev cargo run` → ngrok バイナリが PATH にあれば child 起動、PID がログ出力
 - ngrok バイナリ不在 → 起動時 exit(1) + 明示的エラーメッセージ
 - `cargo run` → Ctrl-C (T10 前の簡易確認) で **ngrok プロセスも止まる** (ps で残存しない)
-- `MY_TASK_SYNC_NGROK_DOMAIN=foo.ngrok-free.dev cargo run` で env 経由設定が効く
+- `NGROK_DOMAIN=""` (空文字) は未設定と同じ扱い → ngrok 起動なし
 - unit tests: NgrokGuard::drop が 2 回呼ばれても安全 (再入可能) / Error::Config メッセージに "ngrok" を含む
 
 **検証手順**:
 1. `cargo build --release`
 2. `ngrok` が PATH にあること (`which ngrok`)
 3. ngrok authtoken 設定済みであること (`ngrok config check`)
-4. `[ngrok].domain` 設定して `cargo run` → ログに "listening" + "ngrok started pid=<N>" が両方出る
+4. `NGROK_DOMAIN=<domain>.ngrok-free.dev MY_TASK_SYNC_API_KEY=... ./target/release/my-task-sync` → ログに "listening" + "ngrok started pid=<N>" が両方出る
 5. `curl https://<domain>.ngrok-free.dev/healthz` → 200 "ok"
 6. Ctrl-C → ngrok プロセスが ps に残っていないこと
 
@@ -496,9 +497,11 @@ SERVER_DESIGN.md に反映。
     ngrok config add-authtoken <token>
     ngrok config check    # 動作確認
     ```
-  - Configure セクションに `[ngrok].domain` を追加
+  - 環境変数表に `NGROK_DOMAIN` を追加 (未設定なら ngrok 無効と明記)
+  - `com.my-task-sync.plist` の `EnvironmentVariables` に `NGROK_DOMAIN` を
+    足すサンプルを提示 (launchctl 運用の人向け)
   - Manage セクションに "公開 URL 確認" として `curl localhost:3333/api/status` を追加
-- `config.example.toml`: `[ngrok]` セクションを非コメントで追加 + `domain` をプレースホルダに
+- `config.example.toml`: 触らない (ngrok 設定は env 限定のため)
 - `docs/MY_OWN_INTEGRATION.md`:
   - Phase 2 セクションを更新 (ngrok URL への env 切り替え手順を確定 / `/api/status` で到達性確認できる旨)
 
