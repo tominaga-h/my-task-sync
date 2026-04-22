@@ -21,6 +21,8 @@
   <dict>
     <key>RUST_LOG</key>
     <string>my_task_sync=info</string>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
 </dict>
 </plist>
