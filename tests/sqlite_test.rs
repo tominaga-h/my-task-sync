@@ -271,6 +271,166 @@ fn read_reminds_for_tasks_handles_empty_input_slice() {
     assert!(map.is_empty());
 }
 
+// ---------- projects CRUD (T100 / v0.2.0) ----------
+
+#[test]
+fn insert_project_returns_new_row() {
+    // Given: 空の projects
+    let conn = make_my_task_db();
+
+    // When
+    let p = sqlite::insert_project(&conn, "alpha").expect("insert_project");
+
+    // Then: id は rowid、name が保存されている
+    assert!(p.id > 0);
+    assert_eq!(p.name, "alpha");
+    let (found_id, found_name): (i64, String) = conn
+        .query_row("SELECT id, name FROM projects", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(found_id, p.id);
+    assert_eq!(found_name, "alpha");
+}
+
+#[test]
+fn insert_project_duplicate_returns_sqlite_constraint_error() {
+    // Given: 既存 "dup"
+    let conn = make_my_task_db();
+    sqlite::insert_project(&conn, "dup").unwrap();
+
+    // When
+    let err = sqlite::insert_project(&conn, "dup").expect_err("should error on dup");
+
+    // Then: rusqlite の ConstraintViolation がそのまま Error::Sqlite で bubble up
+    match err {
+        my_task_sync::error::Error::Sqlite(rusqlite::Error::SqliteFailure(code, _)) => {
+            assert_eq!(code.code, rusqlite::ErrorCode::ConstraintViolation);
+        }
+        other => panic!("expected sqlite constraint violation, got {other:?}"),
+    }
+}
+
+#[test]
+fn read_project_by_id_returns_none_for_missing() {
+    // Given
+    let conn = make_my_task_db();
+
+    // When
+    let got = sqlite::read_project_by_id(&conn, 999).unwrap();
+
+    // Then
+    assert!(got.is_none());
+}
+
+#[test]
+fn read_project_by_name_finds_existing() {
+    // Given
+    let conn = make_my_task_db();
+    let inserted = sqlite::insert_project(&conn, "work").unwrap();
+
+    // When
+    let got = sqlite::read_project_by_name(&conn, "work")
+        .unwrap()
+        .expect("exists");
+
+    // Then
+    assert_eq!(got.id, inserted.id);
+    assert_eq!(got.name, "work");
+
+    // And: 存在しない名前は None
+    assert!(sqlite::read_project_by_name(&conn, "missing")
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn update_project_name_changes_name() {
+    // Given
+    let conn = make_my_task_db();
+    let p = sqlite::insert_project(&conn, "old-name").unwrap();
+
+    // When
+    sqlite::update_project_name(&conn, p.id, "new-name").unwrap();
+
+    // Then
+    let got = sqlite::read_project_by_id(&conn, p.id).unwrap().unwrap();
+    assert_eq!(got.name, "new-name");
+}
+
+#[test]
+fn update_project_name_to_duplicate_errors() {
+    // Given: 2 件
+    let conn = make_my_task_db();
+    let _a = sqlite::insert_project(&conn, "alpha").unwrap();
+    let b = sqlite::insert_project(&conn, "beta").unwrap();
+
+    // When: beta → alpha にリネーム → UNIQUE 違反
+    let err =
+        sqlite::update_project_name(&conn, b.id, "alpha").expect_err("should error on dup rename");
+
+    // Then
+    match err {
+        my_task_sync::error::Error::Sqlite(rusqlite::Error::SqliteFailure(code, _)) => {
+            assert_eq!(code.code, rusqlite::ErrorCode::ConstraintViolation);
+        }
+        other => panic!("expected sqlite constraint violation, got {other:?}"),
+    }
+}
+
+#[test]
+fn count_tasks_for_project_counts_correctly() {
+    // Given: プロジェクト + 3 件のタスク + 別プロジェクトのタスク 1 件
+    let conn = make_my_task_db();
+    let target = sqlite::insert_project(&conn, "target").unwrap();
+    let other = sqlite::insert_project(&conn, "other").unwrap();
+
+    for i in 0..3 {
+        let title = format!("t{i}");
+        insert_raw_task(
+            &conn,
+            &title,
+            "open",
+            Some(target.id),
+            "2026-04-12",
+            "2026-04-12",
+        );
+    }
+    // ノイズ: 別プロジェクト / project_id = NULL
+    insert_raw_task(
+        &conn,
+        "other",
+        "open",
+        Some(other.id),
+        "2026-04-12",
+        "2026-04-12",
+    );
+    insert_raw_task(&conn, "noproj", "open", None, "2026-04-12", "2026-04-12");
+
+    // When
+    let n = sqlite::count_tasks_for_project(&conn, target.id).unwrap();
+
+    // Then
+    assert_eq!(n, 3);
+    // And: タスク 0 件のプロジェクトは 0
+    let empty = sqlite::insert_project(&conn, "empty").unwrap();
+    assert_eq!(sqlite::count_tasks_for_project(&conn, empty.id).unwrap(), 0);
+}
+
+#[test]
+fn delete_project_removes_row() {
+    // Given
+    let conn = make_my_task_db();
+    let p = sqlite::insert_project(&conn, "to-delete").unwrap();
+    assert!(sqlite::read_project_by_id(&conn, p.id).unwrap().is_some());
+
+    // When
+    sqlite::delete_project(&conn, p.id).unwrap();
+
+    // Then
+    assert!(sqlite::read_project_by_id(&conn, p.id).unwrap().is_none());
+}
+
 // ---------- open: busy_timeout ----------
 
 #[test]

@@ -160,6 +160,15 @@ pub struct ProjectListResponse {
     pub server_time: DateTime<Utc>,
 }
 
+/// `POST /api/projects` / `PATCH /api/projects/{id}` のレスポンス共通形。
+/// `TaskResponse` と同じスタイルで camelCase にシリアライズする。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectResponse {
+    pub project: Project,
+    pub server_time: DateTime<Utc>,
+}
+
 fn date_to_dt(d: NaiveDate) -> DateTime<Utc> {
     d.and_hms_opt(0, 0, 0)
         .expect("00:00:00 is a valid wall time")

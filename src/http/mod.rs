@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use axum::http::StatusCode;
-use axum::routing::get;
+use axum::routing::{get, patch};
 use axum::{middleware, Router};
 use rusqlite::Connection;
 use tower_http::trace::TraceLayer;
@@ -74,7 +74,14 @@ pub fn router(state: AppState) -> Router {
             "/tasks/{task_number}",
             get(tasks::get_task).patch(tasks::patch_task),
         )
-        .route("/projects", get(projects::list_projects))
+        .route(
+            "/projects",
+            get(projects::list_projects).post(projects::create_project),
+        )
+        .route(
+            "/projects/{id}",
+            patch(projects::update_project).delete(projects::delete_project),
+        )
         .fallback(api_not_found)
         .layer(middleware::from_fn_with_state(
             state.clone(),

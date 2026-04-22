@@ -36,6 +36,11 @@ pub enum Error {
     Unauthorized,
     /// リソースが見つからない (PATCH / GET by id で task_number 不在など)。
     NotFound,
+    /// リソース状態との衝突 (409)。プロジェクト名重複や、紐づくタスクが
+    /// 残ったままのプロジェクト削除など。`msg` はそのままクライアントに返す
+    /// (UI 側で `/project has (\d+) tasks/` を正規表現パースする箇所があるので
+    /// `"project has N tasks"` の文言は変更禁止)。
+    Conflict(String),
 }
 
 impl fmt::Display for Error {
@@ -51,6 +56,7 @@ impl fmt::Display for Error {
             Error::Api { status, body } => write!(f, "api error {status}: {body}"),
             Error::Unauthorized => write!(f, "unauthorized"),
             Error::NotFound => write!(f, "not found"),
+            Error::Conflict(msg) => write!(f, "conflict: {msg}"),
         }
     }
 }
@@ -67,7 +73,8 @@ impl std::error::Error for Error {
             | Error::BadRequest(_)
             | Error::Api { .. }
             | Error::Unauthorized
-            | Error::NotFound => None,
+            | Error::NotFound
+            | Error::Conflict(_) => None,
         }
     }
 }
@@ -81,6 +88,7 @@ impl IntoResponse for Error {
             Error::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".into()),
             Error::NotFound => (StatusCode::NOT_FOUND, "not found".into()),
             Error::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
+            Error::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             _ => {
                 tracing::error!(error = %self, "server error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal error".into())

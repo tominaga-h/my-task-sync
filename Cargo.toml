@@ -1,6 +1,6 @@
 [package]
 name = "my-task-sync"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.75"
 description = "Local daemon syncing my-task SQLite with my-own (Neon) over HTTP"

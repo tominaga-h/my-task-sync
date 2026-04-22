@@ -70,6 +70,97 @@ pub fn read_projects(conn: &Connection) -> Result<Vec<crate::model::Project>, Er
     Ok(out)
 }
 
+/// Insert a new project row and return the inserted `Project` (id + name).
+///
+/// `name` は UNIQUE 制約付きなので、重複時は rusqlite が
+/// `SqliteFailure(ConstraintViolation)` を返す。呼び出し側 (POST ハンドラ)
+/// がそれを `Error::Conflict` にマップする責務を持つ — ここでは bubble-up。
+pub fn insert_project(conn: &Connection, name: &str) -> Result<crate::model::Project, Error> {
+    conn.execute("INSERT INTO projects (name) VALUES (?1)", params![name])?;
+    let id = conn.last_insert_rowid();
+    Ok(crate::model::Project {
+        id,
+        name: name.to_string(),
+    })
+}
+
+/// Look up a project by its primary key `id`. 存在しなければ `Ok(None)`。
+pub fn read_project_by_id(
+    conn: &Connection,
+    id: i64,
+) -> Result<Option<crate::model::Project>, Error> {
+    let result = conn.query_row(
+        "SELECT id, name FROM projects WHERE id = ?1",
+        params![id],
+        |row| {
+            Ok(crate::model::Project {
+                id: row.get(0)?,
+                name: row.get(1)?,
+            })
+        },
+    );
+    match result {
+        Ok(p) => Ok(Some(p)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(Error::Sqlite(e)),
+    }
+}
+
+/// Look up a project by exact-match `name`. 存在しなければ `Ok(None)`。
+pub fn read_project_by_name(
+    conn: &Connection,
+    name: &str,
+) -> Result<Option<crate::model::Project>, Error> {
+    let result = conn.query_row(
+        "SELECT id, name FROM projects WHERE name = ?1",
+        params![name],
+        |row| {
+            Ok(crate::model::Project {
+                id: row.get(0)?,
+                name: row.get(1)?,
+            })
+        },
+    );
+    match result {
+        Ok(p) => Ok(Some(p)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(Error::Sqlite(e)),
+    }
+}
+
+/// Rename an existing project. UNIQUE 制約にぶつかったら rusqlite が
+/// `SqliteFailure(ConstraintViolation)` を返すので呼び出し側が
+/// `Error::Conflict` にマップする。存在しない id の UPDATE は no-op (0 row)
+/// で成功扱い — 呼び出し側が事前に存在確認している前提 (PATCH ハンドラ)。
+pub fn update_project_name(conn: &Connection, id: i64, new_name: &str) -> Result<(), Error> {
+    conn.execute(
+        "UPDATE projects SET name = ?1 WHERE id = ?2",
+        params![new_name, id],
+    )?;
+    Ok(())
+}
+
+/// Count tasks whose `project_id` equals the given id.
+///
+/// DELETE `/api/projects/{id}` の「紐づくタスクがあれば 409」判定のみに
+/// 使う。集計なので `i64` (COUNT の型) でそのまま返す。
+pub fn count_tasks_for_project(conn: &Connection, project_id: i64) -> Result<i64, Error> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM tasks WHERE project_id = ?1",
+        params![project_id],
+        |row| row.get(0),
+    )?;
+    Ok(n)
+}
+
+/// Delete a project row by id. 存在しない id は no-op (0 row) で成功扱い。
+/// 呼び出し側 (DELETE ハンドラ) が事前に存在確認 + tasks 0 件を
+/// トランザクション内で確認する前提。
+pub fn delete_project(conn: &Connection, id: i64) -> Result<(), Error> {
+    conn.execute("DELETE FROM projects WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
 // ------------------------------------------------------------------
 // tasks: insert / update
 // ------------------------------------------------------------------
